@@ -3661,6 +3661,11 @@ test "delete through an alias that admits undefined (deletealias)" {
     #|declare const j: J;
     #|export function okUnknownAlias() { delete j.u; }
     #|export function okAnyAlias() { delete j.a; }
+    #|type UnkAlias = unknown;
+    #|interface K { u: UnkAlias | number; w: unknown | number }
+    #|declare const k: K;
+    #|export function okUnknownUnionAlias() { delete k.u; }
+    #|export function okUnknownUnion() { delete k.w; }
   assert_eq(issue_lines(src), [
     "function badC > delete: the operand of a `delete` operator must be optional",
     "function badD > delete: the operand of a `delete` operator must be optional",
@@ -3786,4 +3791,190 @@ test "a parameter named Map does not shadow the lib collection (newcollectionpar
     #|export class Holder { m = new Map<string, number>(); }
     #|export function okUse(h: Holder): string { return h.m.hello(); }
   assert_eq(issue_lines(shadowed), [])
+}
+
+///|
+/// An inherited constructor's defaulted parameter is optional, as the
+/// class's own one is: `new Sub()` against a base `constructor(d = DS.A)`
+/// was "expected 1 argument(s), got 0" (univer's `NullValueObject`; probed:
+/// tsc accepts it and reports two arguments as "0-1").
+test "an inherited constructor's default makes its parameter optional (inheritedctordefault)" {
+  let src =
+    #|// @strict: true
+    #|enum DS { A = 0, B = 1 }
+    #|export class Base { private _d: DS; constructor(d: DS = DS.A) { this._d = d; } }
+    #|export class Sub extends Base {}
+    #|export const okBase = new Base();
+    #|export const okSub = new Sub();
+    #|export class Base3 { constructor(d: DS = DS.A) {} }
+    #|export class Sub3 extends Base3 {}
+    #|export const badSub3 = new Sub3(DS.A, 2);
+  assert_eq(issue_lines(src), [
+    "top-level > new `Sub3`: expected 0-1 argument(s), got 2",
+  ])
+}
+
+///|
+/// A declaration's initializer is asked the question an assignment asks: a
+/// static factory or an unannotated method whose return cannot be nullish
+/// removes the nullish members of the declared type (univer's
+/// `let v: Nullable<BaseValueObject> = NullValueObject.create()`; probed).
+/// `this` in an unannotated instance method is the instance.
+test "a factory call initializer narrows a nullable declaration (factoryinit)" {
+  let src =
+    #|// @strict: true
+    #|type Nullable<T> = T | null | undefined | void;
+    #|export class B { isError(): boolean { return false; } }
+    #|export class X extends B {
+    #|  private static _instance: X;
+    #|  static create() { this._instance = this._instance || new X(); return this._instance; }
+    #|  static maybe(k: number) { return k > 0 ? new X() : undefined; }
+    #|  static sure(): X { return new X(); }
+    #|  find(k: number) { return k > 0 ? this : undefined; }
+    #|  self() { return this; }
+    #|}
+    #|export function okSingleton() { let v: Nullable<B> = X.create(); return v.isError(); }
+    #|export function okSure() { let v: Nullable<B> = X.sure(); return v.isError(); }
+    #|export function okSelf(x: X) { let v: Nullable<B> = x.self(); return v.isError(); }
+    #|export function badMaybe(k: number) { let v: Nullable<B> = X.maybe(k); return v.isError(); }
+    #|export function badFind(x: X) { let v: Nullable<B> = x.find(1); return v.isError(); }
+  assert_eq(issue_lines(src), [
+    "function badMaybe > call `isError`: object is possibly `undefined`", "function badFind > call `isError`: object is possibly `undefined`",
+  ])
+}
+
+///|
+/// An unannotated method whose body is exactly `return this.FIELD` returns
+/// the field's declared type at a call (univer's `getSkeletonData()`).
+test "a plain getter method returns its field's type (plaingetter)" {
+  let src =
+    #|// @strict: true
+    #|type Nullable<T> = T | null | undefined | void;
+    #|interface Page { pageWidth: number }
+    #|interface Data { pages: Page[] }
+    #|export class Skel {
+    #|  private _data: Nullable<Data>;
+    #|  getData() { return this._data; }
+    #|  okViaMethod(i: number) {
+    #|    const data = this.getData();
+    #|    if (data == null) { return; }
+    #|    const { pages } = data;
+    #|    let p: Nullable<Page> = null;
+    #|    p = pages[i];
+    #|    return p.pageWidth;
+    #|  }
+    #|  badDestructured() {
+    #|    const data = this.getData();
+    #|    if (data == null) { return; }
+    #|    const { pages } = data;
+    #|    const q: string = pages;
+    #|    return q;
+    #|  }
+    #|}
+    #|declare const s: Skel;
+    #|export function badOutside() { const q: string = s.getData(); return q; }
+  assert_eq(issue_lines(src), [
+    "function badOutside > binding `q` init: type `Data | null | undefined | void` is not assignable to type `string`",
+    "function Skel.badDestructured > binding `q` init: expected `string` but got `Page[]`",
+  ])
+}
+
+///|
+/// TS2454 is not reported for a binding whose declared type admits
+/// `undefined` through an alias (`Nullable<T>`, `Maybe<T>`), as tsc does
+/// not report it for the union written out; `OnlyNull<T>` still reports.
+test "TS2454 reads an alias that admits undefined (unassignedalias)" {
+  let src =
+    #|// @strict: true
+    #|type Nullable<T> = T | null | undefined | void;
+    #|type Maybe<T> = T | undefined;
+    #|type OnlyNull<T> = T | null;
+    #|export function okNullableAlias(): number { let e: Nullable<number>; return e as number; }
+    #|export function okMaybeAlias(): number { let e: Maybe<number>; return e as number; }
+    #|export function badOnlyNull(): number { let e: OnlyNull<number>; return e as number; }
+  assert_eq(issue_lines(src), [
+    "function badOnlyNull > use `e`: variable `e` is used before being assigned",
+  ])
+}
+
+///|
+/// The code after a loop sees what the body assigned: `let r: number |
+/// string | E = ""` narrowed to `string`, the body reassigned it, and
+/// `r instanceof E` after the loop was TS2358 (univer's
+/// `Improduct.calculate`; probed). A loop-head binding does not leak.
+test "a loop's assignments reach the code after it (loopexitjoin)" {
+  let src =
+    #|// @strict: true
+    #|export class EV { e = 1; }
+    #|declare function handle(): number | string | EV;
+    #|declare const flag: boolean;
+    #|export function okWhile() {
+    #|  let result: number | string | EV = '';
+    #|  while (flag) { result = handle(); }
+    #|  return result instanceof EV;
+    #|}
+    #|export function okFor(xs: number[]) {
+    #|  let result: number | string | EV = '';
+    #|  for (let i = 0; i < xs.length; i++) { if (flag) { } else { result = handle(); } }
+    #|  return result instanceof EV;
+    #|}
+    #|export function okForOf(xs: number[]) {
+    #|  let result: number | string | EV = '';
+    #|  for (const x of xs) { result = handle(); }
+    #|  return result instanceof EV;
+    #|}
+    #|export function okLoopVarScoped() {
+    #|  for (let i = 0; i < 3; i++) { }
+    #|  let i = "s";
+    #|  return i.length;
+    #|}
+    #|export function badString() {
+    #|  let s: number | string = '';
+    #|  return s instanceof EV;
+    #|}
+  assert_eq(issue_lines(src), [
+    "function badString > instanceof: the left-hand side of an `instanceof` expression must be of type `any`, an object type or a type parameter",
+  ])
+}
+
+///|
+/// A `let` / `const` pattern or loop head declares new bindings, so a name
+/// that shadows an outer binding takes its own declared type: `a = 2` after
+/// `let { a } = { a: 1 }` in a block beside an outer `let a = "s"` was
+/// judged against `string` (probed: tsc accepts every cell here).
+test "a pattern declaration shadows an outer binding's declared type (patternshadow)" {
+  let src =
+    #|// @strict: true
+    #|declare const flag: boolean;
+    #|export function okObject() {
+    #|  let a = "s";
+    #|  if (flag) { let { a } = { a: 1 }; a = 2; }
+    #|  return a.length;
+    #|}
+    #|export function okArray() {
+    #|  let a = "s";
+    #|  if (flag) { let [a] = [1]; a = 2; }
+    #|  return a.length;
+    #|}
+    #|export function okForIn(o: object) {
+    #|  let k = 1;
+    #|  for (let k in o) { k = "x"; }
+    #|  return k + 1;
+    #|}
+    #|export function okForOf(xs: number[]) {
+    #|  let k = "outer";
+    #|  for (let k of xs) { k = k + 1; }
+    #|  return k.length;
+    #|}
+    #|export function okForOfPattern(xs: [number][]) {
+    #|  let k = "outer";
+    #|  for (let [k] of xs) { k = k + 1; }
+    #|  return k.length;
+    #|}
+    #|export function badStillChecked(xs: number[]) {
+    #|  for (let k of xs) { k = "s"; }
+    #|}
+  assert_eq(issue_lines(src), [
+    "function badStillChecked > assign `k`: expected `number` but got `string`",
+  ])
 }

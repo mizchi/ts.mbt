@@ -1,0 +1,24 @@
+// @strict: true
+// @target: esnext
+
+// A declaration's initializer that cannot be nullish removes the nullish
+// members of the declared type, and a call to a static factory or an
+// unannotated method counts by what its body returns: a singleton returned
+// through a static field, `new X()`, or `this` in an instance method. A body
+// that can return `undefined` keeps it.
+
+type Nullable<T> = T | null | undefined | void;
+export class B { isError(): boolean { return false; } }
+export class X extends B {
+  private static _instance: X;
+  static create() { this._instance = this._instance || new X(); return this._instance; }
+  static build() { return new X(); }
+  static maybe(k: number) { return k > 0 ? new X() : undefined; }
+  find(k: number) { return k > 0 ? this : undefined; }
+  self() { return this; }
+}
+export function okSingleton() { let v: Nullable<B> = X.create(); return v.isError(); }
+export function okBuild() { let v: Nullable<B> = X.build(); return v.isError(); }
+export function okSelf(x: X) { let v: Nullable<B> = x.self(); return v.isError(); }
+export function badMaybe(k: number) { let v: Nullable<B> = X.maybe(k); return v.isError(); }
+export function badFind(x: X) { let v: Nullable<B> = x.find(1); return v.isError(); }

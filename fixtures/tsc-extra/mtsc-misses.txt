@@ -79,3 +79,6 @@ jsxTextOpensNoBlockComment:badLaterFunction  same cause as `badAfterElement`
 jsxTextOpensNoTemplate:badAfterElement  the lexer reads the backtick in JSX text as an unterminated template literal that swallows the rest of the file's tokens, so nothing after the element is parsed
 jsxTextOpensNoTemplate:badLaterFunction  same cause as `badAfterElement`
 jsxPayloadFailsBeforeItsEnd:badPayloadMissingSemicolon  a JSX payload whose parse fails before it reaches a nested element (a `for` head with no `;` to end its condition) reads nothing past the failure, so neither the TS1125 inside that element nor the TS1005 is reported
+unannotatedGetterMethodReturn:badInferredField  only a method whose body is exactly `return this.FIELD` with a DECLARED field type returns that type at a call; `_n = 1` has no declared type, so `getN()` is `any`
+unannotatedGetterMethodReturn:badLiteralReturn  same cause as `badInferredField`: an unannotated method returning a literal is `any` at a call
+loopAssignmentsReachExit:badNullableAfterWhile  the back-edge join does not keep the `undefined` an assigned call's declared return carries, so the binding after the loop is not read as possibly `undefined`

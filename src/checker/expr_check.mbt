@@ -8139,7 +8139,10 @@ fn Resolver::lookup_class_field(
   }
   if idx.inst_meth.get(class_key) is Some(meths) && meths.get(field) is Some(i) {
     let m = cls.methods[i]
-    let f = @ast.TsType::Func(method_callable_param_types(m), m.return_type)
+    let f = @ast.TsType::Func(
+      method_callable_param_types(m),
+      self.plain_getter_method_return(class_key, cls, m),
+    )
     // A GENERIC method keeps its binders when it is read as a value
     // (`Injector['get']`, `injector.get.bind(injector)`), the way a generic
     // function declaration's value does. The bare `Func` left `T` free, and
@@ -8165,6 +8168,51 @@ fn Resolver::lookup_class_field(
   // declared property or method matched and the index signature accepts
   // the field's key kind, return the indexed value type.
   index_signature_value(cls.index_signatures, field)
+}
+
+///|
+/// The return type of a method whose return is not annotated and whose
+/// body is exactly `return this.FIELD`, where FIELD is an instance field of
+/// the same class with a declared type: univer's `getSkeletonData() {
+/// return this._skeletonData }` read as `any` at every call, so a binding
+/// declared `Nullable<P>` and assigned from what it returned kept the
+/// declared nullish members (probed: tsc gives the field's type). Anything
+/// else keeps the written return type, so an explicit `: any` stays `any`
+/// (the parser's `<unannotated-return:NAME>` sentinel is required), and a
+/// generic class or method, an accessor and a static abstain.
+fn Resolver::plain_getter_method_return(
+  self : Resolver,
+  class_key : String,
+  cls : @ast.TsClassDecl,
+  m : @ast.TsClassMethodDecl,
+) -> @ast.TsType {
+  if !(m.return_type is Any) ||
+    m.is_static ||
+    m.accessor != "" ||
+    m.is_async ||
+    m.is_generator ||
+    m.type_params.length() > 0 ||
+    cls.type_params.length() > 0 {
+    return m.return_type
+  }
+  guard m.body is Some(b) &&
+    b.stmts is [Return(Some(PropAccess(Var("this"), fname)))] else {
+    return m.return_type
+  }
+  guard self.unannotated_return_members.get(class_key) is Some(names) &&
+    names.contains(m.name) else {
+    return m.return_type
+  }
+  let idx = Resolver::class_index(self)
+  match idx.inst_prop.get(class_key) {
+    Some(props) =>
+      match props.get(fname) {
+        Some(i) if is_checkable(cls.properties[i].type_) =>
+          cls.properties[i].type_
+        _ => m.return_type
+      }
+    None => m.return_type
+  }
 }
 
 ///|
@@ -9708,13 +9756,24 @@ fn Resolver::lookup_inherited_constructor_sig(
         types.push(type_)
         let is_rest = idx < cls.constructor_param_is_rest.length() &&
           cls.constructor_param_is_rest[idx]
+        // A defaulted parameter is optional when the constructor is
+        // inherited too, as `lookup_constructor_sig` already reads it for
+        // the class's own one: univer's `BaseValueObject` declares
+        // `constructor(dateSystem = DateSystem.Date1900)`, and every
+        // `new NullValueObject()` read as "expected 1 argument(s), got 0"
+        // (probed: tsc accepts it).
+        let default = if idx < cls.constructor_param_defaults.length() {
+          cls.constructor_param_defaults[idx]
+        } else {
+          None
+        }
         sig.push({
           name: p.0,
           binding: None,
           is_rest,
-          is_optional: false,
+          is_optional: default is Some(_),
           type_,
-          default: None,
+          default,
         })
       }
       Some((types, sig))
@@ -12490,6 +12549,17 @@ fn return_type_admits_no_value(
     }
     _ => false
   }
+}
+
+///|
+/// Whether `ty`, or a member of the union it expands to, is `unknown`. A
+/// union with an `unknown` member IS `unknown`, so it admits `undefined`
+/// whether the member is written or reached through an alias: `delete j.u`
+/// for `u: A | number` with `type A = unknown` is legal (probed).
+fn union_has_unknown_member(resolver : Resolver, ty : @ast.TsType) -> Bool {
+  union_components(deep_union_members(resolver, resolver.unwrap(ty)))
+  .iter()
+  .any(fn(m) { resolver.unwrap(m) is Unknown })
 }
 
 ///|
@@ -31297,6 +31367,28 @@ fn check_arguments_with_sig(
 }
 
 ///|
+/// The code after a loop sees what the body assigned, not only the entry
+/// narrowing: each arm checks its body in a snapshot it restores, so
+/// `let r: number | string | E = ""; while (c) { r = f() }` left `r` as
+/// the `string` its initializer narrowed it to, and `r instanceof E` after
+/// the loop was TS2358 (univer's `Improduct.calculate`; probed: tsc gives
+/// the join). The back-edge join is exactly that type, with its own
+/// bail-outs (a `break`, a `continue`, a `switch`) keeping the entry
+/// narrowing as before. Only a name bound BEFORE the loop is narrowed, so
+/// a binding the loop head declares does not leak past it, and the
+/// declared slot is untouched.
+fn narrow_loop_exit_joins(
+  env : ExprEnv,
+  joins : Array[(String, @ast.TsType)],
+) -> Unit {
+  for wb in joins {
+    if env.lookup(wb.0) is Some(_) {
+      env.narrow(wb.0, wb.1)
+    }
+  }
+}
+
+///|
 /// One-pass approximation of tsc's loop back-edge join: for each variable
 /// directly reassigned inside the loop body (`x = <rhs>`, statement or
 /// expression form, not inside a nested function), its type at the top of
@@ -33357,6 +33449,26 @@ fn bind_object_pattern(
 }
 
 ///|
+/// A `let` / `const` pattern declares NEW bindings, so each name it binds
+/// takes the type it was just bound to as its declared type. `bind` keeps
+/// the first declared type it saw, which for a name shadowing an outer
+/// binding is the OUTER one: `let a = "s"; { let { a } = { a: 1 }; a = 2 }`
+/// judged `a = 2` against `string`, and so did `for (let k of xs) { k = k +
+/// 1 }` beside an outer `let k = "outer"` (probed: tsc accepts both). A
+/// `var` is function-scoped and redeclares the same binding, so it keeps
+/// its declared type.
+fn declare_pattern_bindings(env : ExprEnv, binding : @ast.TsBinding) -> Unit {
+  let names : Array[String] = []
+  collect_binding_names(binding, names)
+  for n in names {
+    match env.lookup(n) {
+      Some(t) => env.declare_type(n, t)
+      None => ()
+    }
+  }
+}
+
+///|
 fn bind_pattern(
   env : ExprEnv,
   ctx : CheckCtx,
@@ -33862,10 +33974,25 @@ fn narrow_declared_nullish_by_init(
   if kept.length() == members.length() || kept.length() == 0 {
     return
   }
-  let init_ty = infer_expr(env, ctx.resolver, init)
-  if is_in_scope_type_param(ctx, init_ty) ||
-    !type_definitely_non_nullish(ctx.resolver, init_ty) {
-    return
+  // A method call is asked the question the assignment narrowing asks
+  // (`method_call_never_nullish`): a static factory or an unannotated
+  // method reads its return from the declaration or the body, where the
+  // call itself infers as `any`. So `v = NullValueObject.create()` narrowed
+  // and `let v: Nullable<B> = NullValueObject.create()` did not (univer's
+  // `ArrayValueObject._batchOperatorValue`; probed: tsc accepts both).
+  let call_never_nullish = match init {
+    MethodCall(_, _, _) => method_call_never_nullish(env, ctx, init)
+    TypeArgs(_, MethodCall(_, _, _) as inner)
+    | PureCall(MethodCall(_, _, _) as inner) =>
+      method_call_never_nullish(env, ctx, inner)
+    _ => false
+  }
+  if !call_never_nullish {
+    let init_ty = infer_expr(env, ctx.resolver, init)
+    if is_in_scope_type_param(ctx, init_ty) ||
+      !type_definitely_non_nullish(ctx.resolver, init_ty) {
+      return
+    }
   }
   env.narrow(name, union_of(kept))
 }
@@ -38048,8 +38175,13 @@ fn check_ident_binding_decl(
       // A top-level redeclaration of a runtime-provided lib global
       // (`var Symbol: SymbolConstructor;` — ES5SymbolProperty1) merges
       // with the platform value, which is always assigned.
+      // An alias that admits `undefined` (`Nullable<T> = T | null |
+      // undefined | void`, univer's own) admits it as the union written
+      // out does: tsc reports neither (probed), and `OnlyNull<T>` still
+      // reports.
       if is_checkable(declared) &&
         !type_accepts_undefined(declared) &&
+        !target_admits_nullish(ctx.resolver, declared, false, 0) &&
         ctx.strict_property_init &&
         !(ctx.script_top_level && is_lib_global_value_name(name)) &&
         !ctx.resolver.name_assigned_in_static_block(name) {
@@ -38706,9 +38838,17 @@ fn instance_method_return_never_nullish(
   guard ms is [m] && m.accessor == "" && m.type_params.length() == 0 else {
     return false
   }
-  let ret = match method_sole_return_type(m, ctx.resolver) {
+  // `this` in an instance method is the instance, so `self() { return
+  // this }` is never nullish: unbound, it read as `any` and the method
+  // narrowed nothing (probed: tsc accepts `let v: B | undefined =
+  // x.self(); v.m()`).
+  let this_type = Some(@ast.TsType::Named(cname))
+  let ret = match method_sole_return_type(m, ctx.resolver, this_type~) {
     Some(t) => t
-    None => static_factory_body_return_type(m, ctx.resolver).unwrap_or(Any)
+    None =>
+      static_factory_body_return_type(m, ctx.resolver, this_type~).unwrap_or(
+        Any,
+      )
   }
   is_checkable(ret) &&
   union_components(deep_union_members(ctx.resolver, ctx.resolver.unwrap(ret)))
@@ -39408,6 +39548,9 @@ fn check_stmt_unsuppressed(
         infer_expr(env, ctx.resolver, init)
       }
       bind_array_pattern(env, ctx, ab, source_ty)
+      if !(stmt is Var(_, _, _)) {
+        declare_pattern_bindings(env, @ast.TsBinding::Array(ab))
+      }
     }
     Var(@ast.TsBinding::Object(ob), declared, init)
     | Let(@ast.TsBinding::Object(ob), declared, init)
@@ -39471,6 +39614,9 @@ fn check_stmt_unsuppressed(
           narrowing_key_for_expr(init)
         },
       )
+      if !(stmt is Var(_, _, _)) {
+        declare_pattern_bindings(env, @ast.TsBinding::Object(ob))
+      }
       if stmt is Const(_, _, _) && !is_checkable(declared) {
         record_destructured_discriminants(env, ctx.resolver, ob, init)
       }
@@ -39942,7 +40088,8 @@ fn check_stmt_unsuppressed(
       // `string | number` at the call — controlFlowIterationErrors).
       // Applied BEFORE the condition narrowing so a condition that
       // re-narrows the variable keeps precedence.
-      for wb in loop_backedge_bindings(env, ctx, cond, body) {
+      let joins = loop_backedge_bindings(env, ctx, cond, body)
+      for wb in joins {
         env.bind(wb.0, wb.1)
       }
       for b in analyze_narrowing(env, ctx.resolver, cond).then_binds {
@@ -39950,6 +40097,7 @@ fn check_stmt_unsuppressed(
       }
       check_block(env, body, ctx)
       env.restore_from(pre)
+      narrow_loop_exit_joins(env, joins)
       for e in cond_entry {
         match e.1 {
           Some(t) => env.bind(e.0, t)
@@ -39992,7 +40140,8 @@ fn check_stmt_unsuppressed(
         Some(e) => e
         None => BoolLit(true)
       }
-      for wb in loop_backedge_bindings(env, ctx, backedge_cond, backedge_body) {
+      let joins = loop_backedge_bindings(env, ctx, backedge_cond, backedge_body)
+      for wb in joins {
         env.bind(wb.0, wb.1)
       }
       // As for `while`: the condition reads its names at their joined
@@ -40030,6 +40179,7 @@ fn check_stmt_unsuppressed(
       }
       check_block(env, body, ctx)
       env.restore_from(pre)
+      narrow_loop_exit_joins(env, joins)
     }
     ForOf(kind, binding, declared, iter, body) => {
       check_call_args_in_expr(env, iter, ctx)
@@ -40192,16 +40342,23 @@ fn check_stmt_unsuppressed(
           check_forof_assign_pattern(env, ctx, binding, elem_ty)
           bind_pattern(env, ctx, binding, elem_ty)
         }
-        _ => bind_pattern(env, ctx, binding, elem_ty)
+        _ => {
+          bind_pattern(env, ctx, binding, elem_ty)
+          if !(kind is Var) {
+            declare_pattern_bindings(env, binding)
+          }
+        }
       }
       // Loop back-edge join, as for `while`: a binding the body
       // reassigns reaches the next iteration with the union of its entry
       // type and the assigned types.
-      for wb in loop_backedge_head_bindings(env, ctx, binding, body) {
+      let joins = loop_backedge_head_bindings(env, ctx, binding, body)
+      for wb in joins {
         env.bind(wb.0, wb.1)
       }
       check_block(env, body, ctx)
       env.restore_from(pre)
+      narrow_loop_exit_joins(env, joins)
       // TS2454: a `var` bound by the head is only assigned if the loop
       // runs, so a read AFTER it is "used before being assigned" when the
       // element type excludes `undefined` (probed: a top-level read, an
@@ -40270,13 +40427,15 @@ fn check_stmt_unsuppressed(
       // Loop back-edge join, as for `while`: a binding the body
       // reassigns reaches the next iteration with the union of its entry
       // type and the assigned types.
-      for wb in loop_backedge_head_bindings(env, ctx, binding, body) {
+      let joins = loop_backedge_head_bindings(env, ctx, binding, body)
+      for wb in joins {
         env.bind(wb.0, wb.1)
       }
       check_block(env, body, ctx)
       env.restore_from(pre)
+      narrow_loop_exit_joins(env, joins)
     }
-    ForIn(_, binding, declared, iter, body) => {
+    ForIn(in_kind, binding, declared, iter, body) => {
       // TS2491/TS2461: the left side of `for...in` can never be a
       // destructuring pattern, in either the declaration or assignment
       // form (for-inStatementsDestructuring/3/4).
@@ -40320,14 +40479,19 @@ fn check_stmt_unsuppressed(
       // (`for (k in obj) ...`) shouldn't trip use-before-assign.
       clear_unassigned_in_binding(ctx, binding)
       bind_pattern(env, ctx, binding, key_ty)
+      if in_kind is (Let | Const) {
+        declare_pattern_bindings(env, binding)
+      }
       // Loop back-edge join, as for `while`: a binding the body
       // reassigns reaches the next iteration with the union of its entry
       // type and the assigned types.
-      for wb in loop_backedge_head_bindings(env, ctx, binding, body) {
+      let joins = loop_backedge_head_bindings(env, ctx, binding, body)
+      for wb in joins {
         env.bind(wb.0, wb.1)
       }
       check_block(env, body, ctx)
       env.restore_from(pre)
+      narrow_loop_exit_joins(env, joins)
     }
     Switch(scrutinee, cases) => {
       check_call_args_in_expr(env, scrutinee, ctx)
@@ -43334,7 +43498,7 @@ fn check_call_args_in_expr_at(
                       // An alias of `unknown` / `any` admits it as the
                       // type written out does (probed).
                       if is_checkable(ctx.resolver.unwrap(ft)) &&
-                        !(ctx.resolver.unwrap(ft) is Unknown) &&
+                        !union_has_unknown_member(ctx.resolver, ft) &&
                         !target_admits_nullish(ctx.resolver, ft, false, 0) &&
                         !reached_only_through_index_signature(
                           ctx.resolver,

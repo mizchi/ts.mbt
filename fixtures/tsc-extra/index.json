@@ -204,6 +204,46 @@
       ]
     },
     {
+      "case": "classes/inheritedConstructorDefaultParameter.ts",
+      "area": "classes",
+      "name": "inheritedConstructorDefaultParameter",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2554
+      ],
+      "baseline": "baselines/inheritedConstructorDefaultParameter.errors.txt",
+      "claims": [
+        {
+          "name": "okBaseNoArgs",
+          "kind": "ok",
+          "fromLine": 8,
+          "toLine": 8
+        },
+        {
+          "name": "okSubNoArgs",
+          "kind": "ok",
+          "fromLine": 9,
+          "toLine": 9
+        },
+        {
+          "name": "okSubOneArg",
+          "kind": "ok",
+          "fromLine": 10,
+          "toLine": 10
+        },
+        {
+          "name": "badSubTwoArgs",
+          "kind": "bad",
+          "fromLine": 11,
+          "toLine": 12
+        }
+      ]
+    },
+    {
       "case": "classes/inheritedOverloadSetOnGenericBaseClass.ts",
       "area": "classes",
       "name": "inheritedOverloadSetOnGenericBaseClass",
@@ -1338,6 +1378,52 @@
       ]
     },
     {
+      "case": "controlFlow/factoryCallInitializerNarrows.ts",
+      "area": "controlFlow",
+      "name": "factoryCallInitializerNarrows",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        18048
+      ],
+      "baseline": "baselines/factoryCallInitializerNarrows.errors.txt",
+      "claims": [
+        {
+          "name": "okSingleton",
+          "kind": "ok",
+          "fromLine": 17,
+          "toLine": 17
+        },
+        {
+          "name": "okBuild",
+          "kind": "ok",
+          "fromLine": 18,
+          "toLine": 18
+        },
+        {
+          "name": "okSelf",
+          "kind": "ok",
+          "fromLine": 19,
+          "toLine": 19
+        },
+        {
+          "name": "badMaybe",
+          "kind": "bad",
+          "fromLine": 20,
+          "toLine": 20
+        },
+        {
+          "name": "badFind",
+          "kind": "bad",
+          "fromLine": 21,
+          "toLine": 22
+        }
+      ]
+    },
+    {
       "case": "controlFlow/forOfDestructuringAnyAndReadonlyMap.ts",
       "area": "controlFlow",
       "name": "forOfDestructuringAnyAndReadonlyMap",
@@ -1770,6 +1856,65 @@
           "kind": "bad",
           "fromLine": 13,
           "toLine": 14
+        }
+      ]
+    },
+    {
+      "case": "controlFlow/loopAssignmentsReachExit.ts",
+      "area": "controlFlow",
+      "name": "loopAssignmentsReachExit",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2358,
+        18048
+      ],
+      "baseline": "baselines/loopAssignmentsReachExit.errors.txt",
+      "claims": [
+        {
+          "name": "okWhile",
+          "kind": "ok",
+          "fromLine": 14,
+          "toLine": 18
+        },
+        {
+          "name": "okFor",
+          "kind": "ok",
+          "fromLine": 19,
+          "toLine": 23
+        },
+        {
+          "name": "okForOf",
+          "kind": "ok",
+          "fromLine": 24,
+          "toLine": 28
+        },
+        {
+          "name": "okLoopVarScoped",
+          "kind": "ok",
+          "fromLine": 29,
+          "toLine": 33
+        },
+        {
+          "name": "badStringNotReassigned",
+          "kind": "bad",
+          "fromLine": 34,
+          "toLine": 37
+        },
+        {
+          "name": "badAfterCallback",
+          "kind": "bad",
+          "fromLine": 38,
+          "toLine": 42
+        },
+        {
+          "name": "badNullableAfterWhile",
+          "kind": "bad",
+          "fromLine": 43,
+          "toLine": 48
         }
       ]
     },
@@ -2687,6 +2832,46 @@
       ]
     },
     {
+      "case": "controlFlow/unassignedThroughAlias.ts",
+      "area": "controlFlow",
+      "name": "unassignedThroughAlias",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2454
+      ],
+      "baseline": "baselines/unassignedThroughAlias.errors.txt",
+      "claims": [
+        {
+          "name": "okNullableAlias",
+          "kind": "ok",
+          "fromLine": 8,
+          "toLine": 8
+        },
+        {
+          "name": "okMaybeAlias",
+          "kind": "ok",
+          "fromLine": 9,
+          "toLine": 9
+        },
+        {
+          "name": "okWrittenOut",
+          "kind": "ok",
+          "fromLine": 10,
+          "toLine": 10
+        },
+        {
+          "name": "badOnlyNull",
+          "kind": "bad",
+          "fromLine": 11,
+          "toLine": 12
+        }
+      ]
+    },
+    {
       "case": "controlFlow/varInBranchIsTheSameBinding.ts",
       "area": "controlFlow",
       "name": "varInBranchIsTheSameBinding",
@@ -3241,6 +3426,58 @@
           "kind": "bad",
           "fromLine": 10,
           "toLine": 11
+        }
+      ]
+    },
+    {
+      "case": "declarations/patternDeclarationShadowsOuterBinding.ts",
+      "area": "declarations",
+      "name": "patternDeclarationShadowsOuterBinding",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/patternDeclarationShadowsOuterBinding.errors.txt",
+      "claims": [
+        {
+          "name": "okObjectPattern",
+          "kind": "ok",
+          "fromLine": 7,
+          "toLine": 11
+        },
+        {
+          "name": "okArrayPattern",
+          "kind": "ok",
+          "fromLine": 12,
+          "toLine": 16
+        },
+        {
+          "name": "okForInHead",
+          "kind": "ok",
+          "fromLine": 17,
+          "toLine": 21
+        },
+        {
+          "name": "okForOfHead",
+          "kind": "ok",
+          "fromLine": 22,
+          "toLine": 26
+        },
+        {
+          "name": "okForOfPatternHead",
+          "kind": "ok",
+          "fromLine": 27,
+          "toLine": 31
+        },
+        {
+          "name": "badInnerStillChecked",
+          "kind": "bad",
+          "fromLine": 32,
+          "toLine": 35
         }
       ]
     },
@@ -6151,6 +6388,52 @@
       ]
     },
     {
+      "case": "inference/unannotatedGetterMethodReturn.ts",
+      "area": "inference",
+      "name": "unannotatedGetterMethodReturn",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/unannotatedGetterMethodReturn.errors.txt",
+      "claims": [
+        {
+          "name": "okNarrowedThroughGetter",
+          "kind": "ok",
+          "fromLine": 15,
+          "toLine": 22
+        },
+        {
+          "name": "badGetterField",
+          "kind": "bad",
+          "fromLine": 23,
+          "toLine": 23
+        },
+        {
+          "name": "badGetterDestructured",
+          "kind": "bad",
+          "fromLine": 24,
+          "toLine": 30
+        },
+        {
+          "name": "badInferredField",
+          "kind": "bad",
+          "fromLine": 31,
+          "toLine": 31
+        },
+        {
+          "name": "badLiteralReturn",
+          "kind": "bad",
+          "fromLine": 32,
+          "toLine": 33
+        }
+      ]
+    },
+    {
       "case": "inference/unannotatedReturnThroughSwitchAndModuleConsts.ts",
       "area": "inference",
       "name": "unannotatedReturnThroughSwitchAndModuleConsts",
@@ -7041,22 +7324,40 @@
           "toLine": 18
         },
         {
-          "name": "badPayloadInFailedParens",
+          "name": "badArrowTypeArgumentHex",
           "kind": "bad",
           "fromLine": 19,
           "toLine": 19
         },
         {
-          "name": "badPayloadInFailedForHead",
+          "name": "badParenthesizedArrowTypeArgumentHex",
           "kind": "bad",
           "fromLine": 20,
           "toLine": 20
         },
         {
-          "name": "badCommentAfterElement",
-          "kind": "bad",
+          "name": "okArrowTypeArgumentText",
+          "kind": "ok",
           "fromLine": 21,
           "toLine": 21
+        },
+        {
+          "name": "badPayloadInFailedParens",
+          "kind": "bad",
+          "fromLine": 22,
+          "toLine": 22
+        },
+        {
+          "name": "badPayloadInFailedForHead",
+          "kind": "bad",
+          "fromLine": 23,
+          "toLine": 23
+        },
+        {
+          "name": "badCommentAfterElement",
+          "kind": "bad",
+          "fromLine": 24,
+          "toLine": 24
         }
       ]
     },
@@ -10271,7 +10572,19 @@
           "name": "okAnyAlias",
           "kind": "ok",
           "fromLine": 42,
-          "toLine": 43
+          "toLine": 44
+        },
+        {
+          "name": "okUnknownUnionAlias",
+          "kind": "ok",
+          "fromLine": 48,
+          "toLine": 48
+        },
+        {
+          "name": "okUnknownUnion",
+          "kind": "ok",
+          "fromLine": 49,
+          "toLine": 50
         }
       ]
     },

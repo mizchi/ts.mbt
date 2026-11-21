@@ -8188,6 +8188,61 @@ product surfaces now.
       default in a destructuring lookahead, because
       `({ x = <Box<string> /> } = source)` is a parse error in every
       binary, the legal spelling included. That parser gap is filed.
+  Batch HS is univer's next categories, two of #328's second-round Minors,
+  and a false positive found while writing the tests. univer data-validation
+  goes 36 -> 27, sheets-numfmt 35 -> 26 and ui 18 -> 16, with no report at a
+  new site and the oracle unchanged. Each cell was checked against the TS7
+  nightly before the fix was written.
+  - **An inherited constructor's default.** `lookup_inherited_constructor_sig`
+    built every parameter with `is_optional: false, default: None`, while the
+    class's own constructor reads `constructor_param_defaults`. So univer's
+    `new NullValueObject()` against `BaseValueObject`'s `constructor(dateSystem
+    = DateSystem.Date1900)` was "expected 1 argument(s), got 0", and two
+    arguments now read "0-1" as tsc says. The applied-in-some-places family
+    again: the own path and the inherited path built the same record.
+  - **A factory call initializer.** `let v: Nullable<B> = NullValueObject
+    .create()` kept the declared nullish members, while the assignment
+    `v = NullValueObject.create()` narrowed. The declaration path asked
+    whether the initializer's inferred type was non-nullish, and a static
+    factory infers as `any`. It now asks `method_call_never_nullish`, the
+    question the assignment path asks. The instance-method half of that
+    question read the body without binding `this`, so `self() { return this
+    }` was "possibly undefined" too.
+  - **A plain getter method.** An unannotated method whose body is exactly
+    `return this.FIELD` returns the field's declared type at a call. univer's
+    `getSkeletonData() { return this._skeletonData }` read as `any`, so a
+    `Nullable<P>` binding assigned from `pages[i]` kept its nullish members.
+    This is deliberately narrow. A literal or an inferred-field return stays
+    `any` and is a declared MISS, because typing unannotated returns
+    generally is the change that exposed four unrelated gaps when a static
+    factory's call was typed (recorded at `method_call_never_nullish`).
+  - **TS2454 through an alias.** `let e: Nullable<number>; use(e)` was
+    "used before being assigned". tsc does not report a binding whose
+    declared type admits `undefined`, and `type_accepts_undefined` does not
+    expand aliases. `OnlyNull<T>` still reports.
+  - **The code after a loop.** Every loop arm checks its body in a snapshot
+    it restores, so code after the loop saw only the entry narrowing. Given
+    `let r: number | string | E = ""` reassigned in the body, `r instanceof E`
+    after the loop was TS2358 (univer's `Improduct.calculate`). The
+    back-edge join is exactly the post-loop type, with its own bail-outs (a
+    `break`, a `continue`, a `switch`) keeping the old behaviour, so it is
+    narrowed back in after the restore, for names bound before the loop only.
+    A nullable assigned in the body is still not seen there (a declared
+    MISS), because the join does not keep the `undefined` an assigned call's
+    declared return carries.
+  - **A pattern declaration shadowing an outer binding.** `bind` keeps the
+    first declared type it saw, which for a shadowing name is the OUTER
+    one, so `let a = "s"; { let { a } = { a: 1 }; a = 2 }` judged `a = 2`
+    against `string`. The same held for array patterns and for `let` / `const`
+    in a `for-of` or `for-in` head. A `let` / `const` pattern now declares
+    each name it binds, while a `var` is left alone, since it redeclares the
+    same function-scoped binding. The `for await` site was written and
+    reverted: its element type is not resolved here, so the change could
+    not be observed.
+  - **#328's second round.** The `>` of a `=>` closed a JSX element's
+    type-argument span early, so `<Box<() => 0x> />` lost its TS1125, at
+    both span scans. And a union with an `unknown` member admits `undefined`,
+    so `delete` on `unknown | number` is legal; that was pre-existing.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
