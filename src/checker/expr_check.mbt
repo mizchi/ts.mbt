@@ -26078,6 +26078,11 @@ fn structural_oneway_assignable_rec(
       // leaves, and descending one alias level at a time re-walked a
       // shared alias once per path (#332's review).
       let members = flatten_union_alias_leaves(resolver, nested)
+      // No leaves means aliases that only name each other, which tsc
+      // reports at the alias (TS2456) and then reads as `any`.
+      if members.is_empty() {
+        return true
+      }
       // A member is tried with the plain relation too: the recursion's own
       // base case is the NAMED comparison, which says nothing about a
       // primitive, so `"你好"` against `string | string[] | ILanguagePack`
@@ -28696,14 +28701,36 @@ fn Resolver::object_extends_decision(
 /// `collect_declared_fields` returns nothing, and `{ ...base, b: 2 }` closed
 /// over `{ b }` alone — making `merged.a` a false positive on perfectly
 /// legal TypeScript.
-fn spread_shape_is_known(ty : @ast.TsType, resolver : Resolver) -> Bool {
+///
+/// A union is read through its leaves, each alias once, and the walk is
+/// depth-bounded: aliases that only name each other (`type A = B | C;
+/// type B = A | C; type C = A | B`, TS2456) recursed until the stack ran
+/// out, on main too (#332's review). Running out of depth, or a union with
+/// no leaves, is "not known", which keeps the literal's key set open.
+fn spread_shape_is_known(
+  ty : @ast.TsType,
+  resolver : Resolver,
+  depth~ : Int32 = 0,
+) -> Bool {
+  if depth > 16 {
+    return false
+  }
   match resolver.unwrap(ty) {
     Object(_) | Struct(_, _) => true
     // Every member of a union / intersection has to be enumerable for the
     // combination to be.
-    Union(members) | Intersection(members) => {
+    Union(nested) => {
+      let members = flatten_union_alias_leaves(resolver, nested)
       for m in members {
-        if !spread_shape_is_known(m, resolver) {
+        if !spread_shape_is_known(m, resolver, depth=depth + 1) {
+          return false
+        }
+      }
+      members.length() > 0
+    }
+    Intersection(members) => {
+      for m in members {
+        if !spread_shape_is_known(m, resolver, depth=depth + 1) {
           return false
         }
       }
@@ -29409,11 +29436,14 @@ fn collect_declared_fields_unwrapped_at(
     // re-walked an alias once per path that reached it, so eight levels of
     // ten aliases that each name the whole level below never finished
     // (#332's review).
-    Union(nested) =>
-      if nested.length() == 0 {
+    //
+    // A union of aliases that only name each other (`type A = B | C; type
+    // B = A | C; type C = A | B`, TS2456) has no leaves, and has no fields.
+    Union(nested) => {
+      let parts = flatten_union_alias_leaves(resolver, nested)
+      if parts.length() == 0 {
         ()
       } else {
-        let parts = flatten_union_alias_leaves(resolver, nested)
         let first_fields = collect_declared_fields_at(
           parts[0],
           resolver,
@@ -29451,6 +29481,7 @@ fn collect_declared_fields_unwrapped_at(
           out.push((entry.0, entry.1))
         }
       }
+    }
     _ => ()
   }
   out

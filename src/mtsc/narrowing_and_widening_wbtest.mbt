@@ -4513,3 +4513,36 @@ test "identical object branches relate as one object (samebranches)" {
     "function badSameBranches > call `translateRange` arg[0]: expected `IRange` but got `{ startRow: number; endRow: number }`",
   ])
 }
+
+///|
+/// Aliases that only name each other (`type A = B | C; type B = A | C;
+/// type C = A | B`) are TS2456, and tsc then reads them as `any`, so every
+/// use below is silent there. On main, `keyof A`, an assignment from `A`
+/// and an assignment into `A` hung (each recursed member by member to a
+/// depth bound, two ways at every level) and `{ ...a }` overflowed the
+/// stack. Flattening opened each alias once and found no leaf, and the
+/// first version then read `parts[0]` of the empty result (#332's review).
+/// A union with no leaves has no fields, takes any source, and is not a
+/// known spread shape. `{ ...d }` over an intersection cycle overflowed the
+/// stack on main too.
+test "a union of aliases that only name each other has no leaves (cyclicunion)" {
+  let src =
+    #|// @strict: true
+    #|type A = B | C; type B = A | C; type C = A | B;
+    #|export const okKeyof: keyof A = "x";
+    #|declare const a: A;
+    #|export const okSpread = { ...a };
+    #|export function okFrom(v: A) { const w: { z: number } = v; return w; }
+    #|class K { private p = 1 }
+    #|export function okInto(k: K) { const t: A = k; return t; }
+    #|type D = D & { x: number };
+    #|declare const d: D;
+    #|export const okSpreadIntersection = { ...d };
+  // The TS2456s and nothing else, as tsc reports. `D` is the same cycle
+  // through an intersection, which a union's leaves do not reach, so the
+  // spread walk is depth-bounded as well.
+  assert_eq(issue_lines(src), [
+    "A: type alias resolves to itself without an intervening structural form", "B: type alias resolves to itself without an intervening structural form",
+    "C: type alias resolves to itself without an intervening structural form", "D: type alias resolves to itself without an intervening structural form",
+  ])
+}

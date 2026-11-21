@@ -8499,6 +8499,20 @@ product surfaces now.
     and discriminant narrowing through `non_nullable_resolved`. The fix
     that ends the family is one flattened, memoized view of an alias union
     in the resolver, so that no walk sees the DAG at all.
+  - **#332's third round: a union with no leaves.** Aliases that only name
+    each other (`type A = B | C; type B = A | C; type C = A | B`, TS2456)
+    flatten to nothing, since each alias opens once and none reaches a
+    leaf, and the field walk then read `parts[0]` of the empty result. The
+    review predicted an abort, and that is what the second round's binary
+    did. The probe found the state on main was no better: `keyof A`, an
+    assignment from `A` and one into `A` HUNG there, each recursing member
+    by member to a depth bound two ways at every level, and `{ ...a }`
+    overflowed the stack, as did `{ ...d }` over `type D = D & { x: number
+    }`. tsc reports the three TS2456s and reads the aliases as `any`, so a
+    union with no leaves now has no fields and takes any source, and
+    `spread_shape_is_known` reads a union's leaves and is depth-bounded for
+    the intersection. All five uses now report exactly tsc's TS2456s, and
+    each guard is mutation-proven by the test binary crashing without it.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's
