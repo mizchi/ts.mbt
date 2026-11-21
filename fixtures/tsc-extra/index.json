@@ -2967,6 +2967,172 @@
       ]
     },
     {
+      "case": "directives/tsIgnoreCoversStatementPieces.ts",
+      "area": "directives",
+      "name": "tsIgnoreCoversStatementPieces",
+      "options": {
+        "target": "esnext",
+        "lib": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2300,
+        2322,
+        2850
+      ],
+      "baseline": "baselines/tsIgnoreCoversStatementPieces.errors.txt",
+      "claims": [
+        {
+          "name": "okAsDup",
+          "kind": "ok",
+          "fromLine": 12,
+          "toLine": 15
+        },
+        {
+          "name": "badAsDup",
+          "kind": "bad",
+          "fromLine": 16,
+          "toLine": 20
+        },
+        {
+          "name": "okGroupA",
+          "kind": "ok",
+          "fromLine": 21,
+          "toLine": 21
+        },
+        {
+          "name": "badGroupA",
+          "kind": "bad",
+          "fromLine": 22,
+          "toLine": 24
+        },
+        {
+          "name": "okGroupLaterA",
+          "kind": "ok",
+          "fromLine": 25,
+          "toLine": 27
+        },
+        {
+          "name": "okElseIf",
+          "kind": "ok",
+          "fromLine": 31,
+          "toLine": 41
+        },
+        {
+          "name": "okForHead",
+          "kind": "ok",
+          "fromLine": 42,
+          "toLine": 47
+        },
+        {
+          "name": "badForBody",
+          "kind": "bad",
+          "fromLine": 48,
+          "toLine": 55
+        },
+        {
+          "name": "okUsing",
+          "kind": "ok",
+          "fromLine": 56,
+          "toLine": 60
+        },
+        {
+          "name": "okUsingGroup",
+          "kind": "ok",
+          "fromLine": 61,
+          "toLine": 65
+        },
+        {
+          "name": "badUsing",
+          "kind": "bad",
+          "fromLine": 66,
+          "toLine": 69
+        },
+        {
+          "name": "okForUsing",
+          "kind": "ok",
+          "fromLine": 70,
+          "toLine": 74
+        },
+        {
+          "name": "okTemplate",
+          "kind": "ok",
+          "fromLine": 75,
+          "toLine": 82
+        },
+        {
+          "name": "badTemplate",
+          "kind": "bad",
+          "fromLine": 83,
+          "toLine": 89
+        },
+        {
+          "name": "okTagged",
+          "kind": "ok",
+          "fromLine": 90,
+          "toLine": 97
+        }
+      ]
+    },
+    {
+      "case": "directives/tsIgnoreInJsxPayload.tsx",
+      "area": "directives",
+      "name": "tsIgnoreInJsxPayload",
+      "options": {
+        "jsx": "preserve"
+      },
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/tsIgnoreInJsxPayload.errors.txt",
+      "claims": [
+        {
+          "name": "okPayload",
+          "kind": "ok",
+          "fromLine": 10,
+          "toLine": 17
+        },
+        {
+          "name": "badPayload",
+          "kind": "bad",
+          "fromLine": 18,
+          "toLine": 24
+        }
+      ]
+    },
+    {
+      "case": "directives/tsIgnoreLineTerminators.ts",
+      "area": "directives",
+      "name": "tsIgnoreLineTerminators",
+      "options": {},
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/tsIgnoreLineTerminators.errors.txt",
+      "claims": [
+        {
+          "name": "badAfterNbspLine",
+          "kind": "bad",
+          "fromLine": 15,
+          "toLine": 18
+        },
+        {
+          "name": "badAfterLsOnlyLine",
+          "kind": "bad",
+          "fromLine": 19,
+          "toLine": 22
+        },
+        {
+          "name": "okAfterTabSpaceLine",
+          "kind": "ok",
+          "fromLine": 23,
+          "toLine": 24
+        }
+      ]
+    },
+    {
       "case": "directives/tsNocheckAfterBlockComment.ts",
       "area": "directives",
       "name": "tsNocheckAfterBlockComment",
@@ -3534,6 +3700,120 @@
           "kind": "bad",
           "fromLine": 29,
           "toLine": 30
+        }
+      ]
+    },
+    {
+      "case": "inference/callbackOverUnsolvedBinder.ts",
+      "area": "inference",
+      "name": "callbackOverUnsolvedBinder",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2345,
+        2554,
+        7006
+      ],
+      "baseline": "baselines/callbackOverUnsolvedBinder.errors.txt",
+      "claims": [
+        {
+          "name": "okExplicitVoid",
+          "kind": "ok",
+          "fromLine": 12,
+          "toLine": 12
+        },
+        {
+          "name": "badExplicitNumber",
+          "kind": "bad",
+          "fromLine": 13,
+          "toLine": 13
+        },
+        {
+          "name": "okContextual",
+          "kind": "ok",
+          "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "badContextualNumber",
+          "kind": "bad",
+          "fromLine": 15,
+          "toLine": 15
+        },
+        {
+          "name": "badNoContext",
+          "kind": "bad",
+          "fromLine": 16,
+          "toLine": 16
+        },
+        {
+          "name": "okCallExplicitVoid",
+          "kind": "ok",
+          "fromLine": 17,
+          "toLine": 17
+        },
+        {
+          "name": "badCallExplicitNumber",
+          "kind": "bad",
+          "fromLine": 18,
+          "toLine": 18
+        },
+        {
+          "name": "badSolvedFromArgument",
+          "kind": "bad",
+          "fromLine": 19,
+          "toLine": 19
+        },
+        {
+          "name": "badRealAny",
+          "kind": "bad",
+          "fromLine": 20,
+          "toLine": 23
+        },
+        {
+          "name": "badOverloadArity",
+          "kind": "bad",
+          "fromLine": 25,
+          "toLine": 25
+        },
+        {
+          "name": "okOverloadArity",
+          "kind": "ok",
+          "fromLine": 26,
+          "toLine": 26
+        },
+        {
+          "name": "badSingleArity",
+          "kind": "bad",
+          "fromLine": 28,
+          "toLine": 28
+        },
+        {
+          "name": "okMetaVoid",
+          "kind": "ok",
+          "fromLine": 30,
+          "toLine": 30
+        },
+        {
+          "name": "badMetaNumber",
+          "kind": "bad",
+          "fromLine": 31,
+          "toLine": 32
+        },
+        {
+          "name": "okRestCallback",
+          "kind": "ok",
+          "fromLine": 34,
+          "toLine": 34
+        },
+        {
+          "name": "okFixedThenRest",
+          "kind": "ok",
+          "fromLine": 36,
+          "toLine": 37
         }
       ]
     },
@@ -4446,6 +4726,70 @@
           "kind": "ok",
           "fromLine": 12,
           "toLine": 15
+        }
+      ]
+    },
+    {
+      "case": "inference/mapCallbackTupleContext.ts",
+      "area": "inference",
+      "name": "mapCallbackTupleContext",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/mapCallbackTupleContext.errors.txt",
+      "claims": [
+        {
+          "name": "okMapTuple",
+          "kind": "ok",
+          "fromLine": 11,
+          "toLine": 11
+        },
+        {
+          "name": "okMapTupleCond",
+          "kind": "ok",
+          "fromLine": 12,
+          "toLine": 12
+        },
+        {
+          "name": "okMapTupleBlock",
+          "kind": "ok",
+          "fromLine": 13,
+          "toLine": 13
+        },
+        {
+          "name": "badMapTupleArity",
+          "kind": "bad",
+          "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "badMapTupleType",
+          "kind": "bad",
+          "fromLine": 15,
+          "toLine": 18
+        },
+        {
+          "name": "okLocalConst",
+          "kind": "ok",
+          "fromLine": 20,
+          "toLine": 20
+        },
+        {
+          "name": "badLocalConst",
+          "kind": "bad",
+          "fromLine": 21,
+          "toLine": 21
+        },
+        {
+          "name": "badLoopReturn",
+          "kind": "bad",
+          "fromLine": 22,
+          "toLine": 23
         }
       ]
     },

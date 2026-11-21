@@ -16744,6 +16744,87 @@ fn erase_phantom_bindings(
 }
 
 ///|
+/// `solve_generic_bindings` starts every binder at `any`, so a binder no
+/// argument gave a candidate for is still `any` afterwards. A CALLBACK
+/// argument checked against a formal built from such a binder is then
+/// contextually typed with `any` where the written type argument, or the
+/// type the call is assigned to, says otherwise: `new Obs<void>((s) =>
+/// s.next())` typed `s` as `Sub<any>`, whose `next(value: any)` needs an
+/// argument, while `Sub<void>`'s does not (univer's `new Observable<void>`).
+/// The written type arguments are checked against the formals separately
+/// (`check_explicit_type_args`), so each PARAMETER of such a callback
+/// formal whose type mentions the binder is erased to `any` here and the
+/// body is left to that check and to the plain walk. The formal keeps its
+/// shape: its arity still constrains the callback, so `(x, y) => ''`
+/// against `{ (x: T): string; … }` is still reported. A binder that a
+/// NON-callback argument mentions is solved by that argument, or is a real
+/// `any`, and keeps its contextual check.
+fn erase_unsolved_callback_formals(
+  type_params : Array[String],
+  raw : Array[@ast.TsType],
+  substituted : Array[@ast.TsType],
+  args : Array[@ast.TsExpr],
+  bindings : Map[String, @ast.TsType],
+) -> Array[@ast.TsType] {
+  let is_callback = fn(i : Int32) {
+    i < args.length() && args[i] is (ArrowFunc(_, _, _, _) | FuncExpr(_))
+  }
+  let unsolved = type_params.filter(fn(tp) {
+    if !(bindings.get(tp) is Some(Any)) {
+      return false
+    }
+    for i, p in raw {
+      if i < args.length() && !is_callback(i) && type_param_occurs(tp, p) {
+        return false
+      }
+    }
+    true
+  })
+  if unsolved.is_empty() {
+    return substituted
+  }
+  let mentions_unsolved = fn(t : @ast.TsType) {
+    unsolved.iter().any(fn(tp) { type_param_occurs(tp, t) })
+  }
+  // `raw` and `substituted` differ only by the substitution, so a callable
+  // formal has the same parameter list in both.
+  fn erase(raw_t : @ast.TsType, sub_t : @ast.TsType) -> @ast.TsType {
+    match (raw_t, sub_t) {
+      (CallableMeta(r, _), CallableMeta(t, meta)) =>
+        @ast.TsType::CallableMeta(erase(r, t), meta)
+      // An optional callback parameter (`subscribe?: (s: Sub<T>) => void`)
+      // is `callable | undefined`.
+      (Union(rs), Union(ts)) if rs.length() == ts.length() =>
+        @ast.TsType::Union(ts.mapi(fn(j, t) { erase(rs[j], t) }))
+      (Func(rps, _), Func(tps, tr)) if rps.length() == tps.length() =>
+        @ast.TsType::Func(
+          tps.mapi(fn(j, tp) {
+            if !mentions_unsolved(rps[j]) {
+              tp
+            } else if rps[j] is Rest(_) {
+              // A rest parameter stays one: `(...xs: T[]) => void` accepts a
+              // callback of any arity, and a bare `any` in its place made
+              // `(a, b) => {}` a one-parameter mismatch.
+              @ast.TsType::Rest(Array(Any))
+            } else {
+              Any
+            }
+          }),
+          tr,
+        )
+      _ => sub_t
+    }
+  }
+  substituted.mapi(fn(i, t) {
+    if i < raw.length() && is_callback(i) && mentions_unsolved(raw[i]) {
+      erase(raw[i], t)
+    } else {
+      t
+    }
+  })
+}
+
+///|
 /// Compute type-parameter bindings at a call site by unifying each
 /// argument's inferred type against the corresponding formal parameter.
 /// Type parameters that remain unbound fall back to `Any`.
@@ -19850,14 +19931,27 @@ fn check_expr_against(
     deferred_arrow_bodies.truncate(arrows_len)
     deferred_func_bodies.truncate(funcs_len)
   }
-  check_expr_against_shape(
-    env,
-    expr,
-    expected,
-    ctx,
-    sub_path,
-    arg_callee_non_generic~,
-  )
+  // `xs.map(cb)` against an array of tuples: tsc types the callback's
+  // returns contextually by the tuple, so `[r.a, r.b]` is `[number, number]`
+  // and not `number[]`. The contextual type is compared here; when it does
+  // not fit, the ordinary path below reports as it always has.
+  let fits_contextually = match
+    contextual_map_tuple_result(env, ctx.resolver, expr, expected) {
+    Some(actual) =>
+      is_assignable_to(actual, expected) ||
+      is_assignable_to(actual, ctx.resolver.unwrap(expected))
+    None => false
+  }
+  if !fits_contextually {
+    check_expr_against_shape(
+      env,
+      expr,
+      expected,
+      ctx,
+      sub_path,
+      arg_callee_non_generic~,
+    )
+  }
   if walk_after {
     check_call_args_in_expr(env, expr, ctx)
   }
@@ -19877,6 +19971,102 @@ fn check_expr_against(
       env.restore_from(snap)
     }
   }
+}
+
+///|
+/// The type of `xs.map(cb)` when the call is checked against an array of
+/// TUPLES (`const r: [number, number][] = xs.map((x) => [x.a, x.b])`).
+/// tsc types the callback's returns contextually by the tuple element, so a
+/// returned array literal is a tuple of its elements; `infer_expr` has no
+/// expected type and reads it as `number[]`, which no tuple accepts
+/// (univer's `ref-range/util.ts`). `None` unless the receiver is an array,
+/// the callback is an unannotated, non-async arrow, every return carries a
+/// value, and the target's element is a tuple.
+fn contextual_map_tuple_result(
+  env : ExprEnv,
+  resolver : Resolver,
+  expr : @ast.TsExpr,
+  expected : @ast.TsType,
+) -> @ast.TsType? {
+  guard expr is MethodCall(recv, "map", [cb] | [cb, _]) else { return None }
+  guard cb is ArrowFunc(arrow_params, declared_ret, body, false) else {
+    return None
+  }
+  if is_checkable(declared_ret) {
+    return None
+  }
+  guard resolver.unwrap(expected) is Array(target_elem) else { return None }
+  guard resolver.unwrap(target_elem) is Tuple(_) else { return None }
+  guard array_element_type(resolver, infer_expr(env, resolver, recv))
+    is Some(elem) else {
+    return None
+  }
+  let inner = ExprEnv::new()
+  copy_env_into_closure(env, inner)
+  let formals = [elem, @ast.TsType::Number, @ast.TsType::Array(elem)]
+  for i, p in arrow_params {
+    bind_param_for_inference(
+      inner,
+      resolver,
+      p,
+      contextual_param_type(p, i, formals),
+    )
+  }
+  // A block body is read only in the shape whose returns are all in view:
+  // local `const`s and expression statements, then one `return`. Any other
+  // statement may hide a `return` (`while (n < 0) { return }` inside a
+  // loop) or bind a name the returned tuple reads, and the helper
+  // abstains, leaving the assignment to the ordinary shape check. The
+  // `const`s are bound first, so `const text = "bad"; return [n, text]`
+  // types `text` rather than reading it as `any`.
+  let returns : Array[@ast.TsExpr?] = []
+  match body {
+    ArrowExpr(e) => returns.push(Some(e))
+    ArrowBlock(b) => {
+      let n = b.stmts.length()
+      guard n > 0 && b.stmts[n - 1] is Return(Some(last)) else { return None }
+      for i in 0..<(n - 1) {
+        match b.stmts[i] {
+          Const(Ident(name), declared, init) =>
+            inner.bind(
+              name,
+              if is_checkable(declared) {
+                declared
+              } else {
+                infer_expr(inner, resolver, init)
+              },
+            )
+          Expr(_) => ()
+          _ => return None
+        }
+      }
+      returns.push(Some(last))
+    }
+  }
+  fn retype(e : @ast.TsExpr) -> @ast.TsType {
+    match e {
+      ArrayLit(elems) if !elems.iter().any(fn(x) { x is Spread(_) }) =>
+        @ast.TsType::Tuple(elems.map(fn(x) { infer_expr(inner, resolver, x) }))
+      Cond(_, a, b) => @ast.TsType::Union([retype(a), retype(b)])
+      other => infer_expr(inner, resolver, other)
+    }
+  }
+  let parts : Array[@ast.TsType] = []
+  for r in returns {
+    match r {
+      Some(e) => parts.push(retype(e))
+      None => return None
+    }
+  }
+  Some(
+    @ast.TsType::Array(
+      if parts.length() == 1 {
+        parts[0]
+      } else {
+        @ast.TsType::Union(parts)
+      },
+    ),
+  )
 }
 
 ///|
@@ -41426,7 +41616,13 @@ fn check_call_args_in_expr_at(
                   args,
                   sig,
                 )
-                substitute_params_array(params, bindings)
+                erase_unsolved_callback_formals(
+                  type_params,
+                  params,
+                  substitute_params_array(params, bindings),
+                  args,
+                  bindings,
+                )
               }
             }
           } else {
@@ -42189,7 +42385,13 @@ fn check_call_args_in_expr_at(
                 args,
                 Some(sig),
               )
-              substitute_params_array(params, bindings)
+              erase_unsolved_callback_formals(
+                cls.type_params,
+                params,
+                substitute_params_array(params, bindings),
+                args,
+                bindings,
+              )
             }
             _ => params
           }
@@ -44184,8 +44386,12 @@ fn check_call_args_in_expr_at(
     As(inner, asserted) => {
       check_call_args_in_expr(env, inner, ctx)
       // TS2300: an object type-literal in the asserted type (`<{a;a}>x`,
-      // `x as { a; a }`) with duplicate property names.
-      collect_type_dup_issues(asserted, ctx.path_prefix, ctx.issues)
+      // `x as { a; a }`) with duplicate property names. It writes the
+      // issue list directly rather than through `record`, so it asks the
+      // `@ts-ignore` flag itself.
+      if !ctx.resolver.suppressing.val {
+        collect_type_dup_issues(asserted, ctx.path_prefix, ctx.issues)
+      }
       // Validate `x as T`: if neither direction is assignable the assertion
       // is always wrong (e.g. `5 as string`).
       // We only flag when both sides are concrete primitive-ish types so we

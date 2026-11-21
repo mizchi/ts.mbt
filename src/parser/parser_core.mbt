@@ -1561,11 +1561,23 @@ fn scan_source_directive_flags(src : String) -> (Bool, Bool, Bool) {
 }
 
 ///|
-/// The offset each line of `src` starts at; `[0]` for a single line.
+/// Whether code unit `c` ends a line: LF, CR, LS (U+2028) or PS (U+2029),
+/// the four the lexer reads as line terminators.
+fn is_line_break_unit(c : UInt16) -> Bool {
+  c == '\n' || c == '\r' || c == '\u2028' || c == '\u2029'
+}
+
+///|
+/// The offset each line of `src` starts at; `[0]` for a single line. A line
+/// ends at any of `is_line_break_unit`'s terminators (probed: `@ts-ignore`
+/// pairs across a CR-, LS- or PS-only line break). A CRLF reads as two
+/// breaks with an empty line between them, which the directive pairing
+/// walks past like any blank line, and every position is placed through
+/// the same table, so no answer depends on counting it once.
 fn source_line_starts(src : String) -> Array[Int32] {
   let out : Array[Int32] = [0]
   for i in 0..<src.length() {
-    if src[i] == '\n' {
+    if is_line_break_unit(src[i]) {
       out.push(i + 1)
     }
   }
@@ -1614,7 +1626,7 @@ fn is_ts_comment_directive_at(src : String, i : Int32, ls : Int32) -> Bool {
   }
   let closes_on_line = fn() {
     let mut q = i
-    while q + 1 < src.length() && src[q] != '\n' {
+    while q + 1 < src.length() && !is_line_break_unit(src[q]) {
       if src[q] == '*' && src[q + 1] == '/' {
         return true
       }
@@ -1644,20 +1656,20 @@ fn is_ts_comment_directive_at(src : String, i : Int32, ls : Int32) -> Bool {
 /// suppress: for each directive, the first line after its own that is
 /// neither blank nor a `//` comment. That is how tsc walks back from a
 /// diagnostic to its directive (probed: a blank line and a `// …` line
-/// between them both keep the pairing). Sorted and without duplicates.
+/// between them both keep the pairing). Blank means spaces, tabs, CR and
+/// LF only: a line holding a no-break space, `\v`, `\f`, or nothing but an
+/// LS or PS terminator ends the walk in the nightly, although LS and PS do
+/// end lines. Sorted and without duplicates.
 fn ts_directive_target_lines(
   src : String,
   line_starts : Array[Int32],
 ) -> Array[Int32] {
   let out : Array[Int32] = []
   let m = src.length()
+  let lines = line_starts.length()
   let line_is_skipped = fn(line : Int32) {
     let start = line_starts[line]
-    let end = if line + 1 < line_starts.length() {
-      line_starts[line + 1]
-    } else {
-      m
-    }
+    let end = if line + 1 < lines { line_starts[line + 1] } else { m }
     for q in start..<end {
       let c = src[q]
       if c == ' ' || c == '\t' || c == '\r' || c == '\n' {
@@ -1667,6 +1679,14 @@ fn ts_directive_target_lines(
       return c == '/' && q + 1 < end && src[q + 1] == '/'
     }
     true
+  }
+  // `next_code[l]`: the first line at or after `l` that is neither blank
+  // nor a `//` comment, `lines` when there is none. One backward pass, so
+  // a run of directive lines costs one visit per line rather than one per
+  // directive per line.
+  let next_code = Array::make(lines + 1, lines)
+  for l = lines - 1; l >= 0; l = l - 1 {
+    next_code[l] = if line_is_skipped(l) { next_code[l + 1] } else { l }
   }
   for i in 0..<m {
     if src[i] != '@' {
@@ -1680,11 +1700,8 @@ fn ts_directive_target_lines(
     if !is_ts_comment_directive_at(src, i, line_starts[line]) {
       continue
     }
-    let mut target = line + 1
-    while target < line_starts.length() && line_is_skipped(target) {
-      target += 1
-    }
-    if target >= line_starts.length() {
+    let target = next_code[line + 1]
+    if target >= lines {
       continue
     }
     if out.length() == 0 || out[out.length() - 1] < target {

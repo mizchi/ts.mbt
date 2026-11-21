@@ -354,8 +354,27 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
   } else {
     start_pos
   }
-  self.note_directive_cover(stmt, start_pos, end_pos)
+  let _ = self.note_directive_cover(stmt, start_pos, end_pos)
   stmt
+}
+
+///|
+/// `note_directive_cover` for a statement parsed outside `parse_stmt`,
+/// which began at `start_pos` and ends at the last token consumed.
+fn Parser::note_directive_cover_here(
+  self : Parser,
+  stmt : @ast.TsStmt,
+  start_pos : Int32,
+) -> Bool {
+  if self.ts_directive_lines.is_empty() {
+    return false
+  }
+  let end_pos = if self.pos > 0 && self.pos - 1 < self.tokens.length() {
+    self.tokens[self.pos - 1].pos
+  } else {
+    start_pos
+  }
+  self.note_directive_cover(stmt, start_pos, end_pos)
 }
 
 ///|
@@ -366,13 +385,14 @@ pub fn Parser::parse_stmt(self : Parser) -> @ast.TsStmt raise ParseError {
 /// its head, since each nested statement decides for itself. A target line
 /// INSIDE a simple statement (`foo(\n // @ts-ignore\n bad)`) covers the
 /// whole statement: tsc would keep a report on its other lines, and
-/// dropping it too can only lose a finding.
+/// dropping it too can only lose a finding. A `let a = 1, b = 2` group
+/// counts as a simple statement. Returns whether `stmt` was covered.
 fn Parser::note_directive_cover(
   self : Parser,
   stmt : @ast.TsStmt,
   start_pos : Int32,
   end_pos : Int32,
-) -> Unit {
+) -> Bool {
   let targets = self.ts_directive_lines
   let start_line = line_of_offset(self.line_starts, start_pos)
   let end_line = line_of_offset(self.line_starts, end_pos)
@@ -388,7 +408,7 @@ fn Parser::note_directive_cover(
     }
   }
   if lo >= targets.length() {
-    return
+    return false
   }
   let target = targets[lo]
   let covered = target == start_line ||
@@ -405,11 +425,72 @@ fn Parser::note_directive_cover(
         | Expr(_)
         | Return(_)
         | Throw(_) => true
+        Block({ stmt_positions, .. }) =>
+          stmt_positions == [@ast.DECL_GROUP_POSITION]
         _ => false
       })
     )
   if covered {
-    self.suppressed_stmts.push(stmt)
+    self.push_directive_cover(stmt)
+  }
+  covered
+}
+
+///|
+/// Take over the statements a fresh sub-parser (one over a SLICE of the
+/// source: a JSX payload, a template substitution) found covered, once its
+/// parse has succeeded. Its line table is its own, so only the result
+/// moves.
+fn Parser::adopt_suppressed_stmts(self : Parser, sub : Parser) -> Unit {
+  for s in sub.suppressed_stmts {
+    self.suppressed_stmts.push(s)
+  }
+}
+
+///|
+/// Whether a directive targets the line holding `pos`.
+fn Parser::directive_targets_line_of(self : Parser, pos : Int32) -> Bool {
+  let targets = self.ts_directive_lines
+  if targets.is_empty() {
+    return false
+  }
+  let line = line_of_offset(self.line_starts, pos)
+  let mut lo = 0
+  let mut hi = targets.length()
+  while lo < hi {
+    let mid = (lo + hi) / 2
+    if targets[mid] < line {
+      lo = mid + 1
+    } else {
+      hi = mid
+    }
+  }
+  lo < targets.length() && targets[lo] == line
+}
+
+///|
+/// Record `stmt` as covered, together with the statements that belong to
+/// what it reports itself, which the checker visits as statements of their
+/// own: each declarator of a `DECL_GROUP_POSITION` group, and a C-style
+/// `for`'s init and update. Without them, each of those would clear the
+/// flag its covered parent set (probed: `// @ts-ignore` above
+/// `let a: string = 1, b: string = 2;` and above
+/// `for (let a: string = 1; ;)` both suppress every report on that line).
+fn Parser::push_directive_cover(self : Parser, stmt : @ast.TsStmt) -> Unit {
+  self.suppressed_stmts.push(stmt)
+  match stmt {
+    Block({ stmts, stmt_positions, }) if stmt_positions ==
+      [@ast.DECL_GROUP_POSITION] =>
+      for s in stmts {
+        self.push_directive_cover(s)
+      }
+    For(init, _, update, _) =>
+      for part in [init, update] {
+        if part is Some(s) {
+          self.push_directive_cover(s)
+        }
+      }
+    _ => ()
   }
 }
 
@@ -1267,8 +1348,9 @@ fn Parser::parse_if(self : Parser) -> @ast.TsStmt raise ParseError {
   let then_block = self.parse_block_or_stmt_no_lexical()
   let else_block : @ast.TsBlock? = if self.match_(Else) {
     if self.check(If) {
-      // else if
-      Some(@ast.TsBlock::{ stmts: [self.parse_if()], stmt_positions: [], })
+      // else if: through `parse_stmt`, so a directive above the inner `if`
+      // covers its head as it would any other statement's.
+      Some(@ast.TsBlock::{ stmts: [self.parse_stmt()], stmt_positions: [], })
     } else {
       Some(self.parse_block_or_stmt_no_lexical())
     }
@@ -1414,6 +1496,7 @@ fn Parser::is_for_of_head(self : Parser) -> Bool {
 ///|
 // / for statement (regularforfor...of)
 fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
+  let for_pos = self.peek().pos
   let _ = self.expect(For)
   let mut is_await = false
   if self.check(Ident("await")) {
@@ -1618,11 +1701,24 @@ fn Parser::parse_for(self : Parser) -> @ast.TsStmt raise ParseError {
         return self.parse_for_rest(Some(decl))
       }
       let loop_stmt = self.parse_for_rest(None)
+      // The head is what a directive above the `for` covers, as for any
+      // loop: here it is the declaration, the loop's own test and update,
+      // and the disposal of what the head acquired.
+      let covered_holders : Array[String] = []
+      if self.directive_targets_line_of(for_pos) {
+        self.push_directive_cover(decl)
+        self.push_directive_cover(loop_stmt)
+        for h in holders {
+          covered_holders.push(h.0)
+        }
+      }
       let (lowered, positions) = lower_using_block(
         [decl, loop_stmt],
         [head_pos, head_pos],
         0,
         holders,
+        covered_holders,
+        self.suppressed_stmts,
       )
       return Block({ stmts: lowered, stmt_positions: positions, })
     }
@@ -2059,6 +2155,8 @@ pub fn Parser::parse_block(self : Parser) -> @ast.TsBlock raise ParseError {
   let mut directive_count = 0
   // One `(holder, is_await)` per `using` binding in this block, in order.
   let using_holders : Array[(String, Bool)] = []
+  // The holders of the `using` declarations a directive covers.
+  let covered_holders : Array[String] = []
   while !self.check(RBrace) && !self.check(Eof) {
     // `using x = expr` / `await using x = expr` (ES2023). The declaration
     // goes through `parse_var_like`, the statement-level parser, which
@@ -2067,8 +2165,19 @@ pub fn Parser::parse_block(self : Parser) -> @ast.TsBlock raise ParseError {
     // lowered once it is complete (`lower_using_block`).
     if self.using_declaration_kind() is Some(is_await_using) {
       in_directive = false
-      stmt_positions.push(self.peek().pos)
-      stmts.push(self.parse_using_declaration(is_await_using, using_holders))
+      let start_pos = self.peek().pos
+      stmt_positions.push(start_pos)
+      let holders_before = using_holders.length()
+      let decl = self.parse_using_declaration(is_await_using, using_holders)
+      // Recorded as the REBUILT declaration, the one the block holds; the
+      // statements that dispose its resources are generated below and are
+      // covered with it.
+      if self.note_directive_cover_here(decl, start_pos) {
+        for i in holders_before..<using_holders.length() {
+          covered_holders.push(using_holders[i].0)
+        }
+      }
+      stmts.push(decl)
       continue
     }
     stmt_positions.push(self.peek().pos)
@@ -2086,7 +2195,14 @@ pub fn Parser::parse_block(self : Parser) -> @ast.TsBlock raise ParseError {
     stmts.push(stmt)
   }
   let (stmts, stmt_positions) = if using_holders.length() > 0 {
-    lower_using_block(stmts, stmt_positions, directive_count, using_holders)
+    lower_using_block(
+      stmts,
+      stmt_positions,
+      directive_count,
+      using_holders,
+      covered_holders,
+      self.suppressed_stmts,
+    )
   } else {
     (stmts, stmt_positions)
   }
@@ -2288,11 +2404,17 @@ fn using_declaration_with_holders(
 /// reached still costs one `await` on the way out, which the language does
 /// not do. The leading directives stay outside the `try`, because a
 /// directive is only one at the start of a function body.
+///
+/// The disposal of each holder in `covered` (a declaration a `@ts-ignore`
+/// covers) is appended to `suppressed`: what it reports is the
+/// declaration's error seen from the `finally`.
 fn lower_using_block(
   stmts : Array[@ast.TsStmt],
   positions : Array[Int32],
   directive_count : Int32,
   holders : Array[(String, Bool)],
+  covered : Array[String],
+  suppressed : Array[@ast.TsStmt],
 ) -> (Array[@ast.TsStmt], Array[Int32]) {
   let n = stmts.length()
   let aligned = positions.length() == n
@@ -2323,13 +2445,20 @@ fn lower_using_block(
     },
   )
   out_positions.push(body_pos)
+  let dispose_of = fn(h : (String, Bool)) {
+    let stmt = using_dispose_stmt(h.0, h.1)
+    if covered.contains(h.0) {
+      suppressed.push(stmt)
+    }
+    stmt
+  }
   let mut fin : @ast.TsBlock = {
-    stmts: [using_dispose_stmt(holders[0].0, holders[0].1)],
+    stmts: [dispose_of(holders[0])],
     stmt_positions: [],
   }
   for i in 1..<holders.length() {
     let dispose : @ast.TsBlock = {
-      stmts: [using_dispose_stmt(holders[i].0, holders[i].1)],
+      stmts: [dispose_of(holders[i])],
       stmt_positions: [],
     }
     fin = { stmts: [Try(dispose, None, None, Some(fin))], stmt_positions: [], }
