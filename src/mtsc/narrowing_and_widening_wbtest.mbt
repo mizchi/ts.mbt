@@ -3087,10 +3087,476 @@ test "a map callback's array literal is typed by the tuple it fills (maptuple)" 
     #|export const okLocalConst: [number, number][] = ns.map((n) => { const m = n + 1; return [n, m]; });
     #|export const badLocalConst: [number, number][] = ns.map((n) => { const text = "bad"; return [n, text]; });
     #|export const badLoopReturn: [number, number][] = ns.map((n) => { while (n < 0) { return; } return [n, n]; });
+    #|export const okGroup: [number, number][] = ns.map((n) => { const a = n, b = n + 1; return [a, b]; });
+    #|export const badGroup: [number, number][] = ns.map((n) => { const a = n, b = "x"; return [a, b]; });
+    #|export const okLet: [number, number][] = ns.map((n) => { let a = n; return [a, a]; });
+    #|export const okLetGroup: [number, number][] = ns.map((n) => { let a = n, b = n; return [a, b]; });
+    #|export const badLetWidened: [number, "x"][] = ns.map((n) => { let s = "x"; return [n, s]; });
   assert_eq(issue_lines(src), [
     "top-level > binding `badMapTupleArity` init: expected `[number, number][]` but got `number[][]`",
     "top-level > binding `badMapTupleType` init: expected `[number, string][]` but got `number[][]`",
     "top-level > binding `badLocalConst` init: expected `[number, number][]` but got `(number | \"bad\" (string))[][]`",
     "top-level > binding `badLoopReturn` init: expected `[number, number][]` but got `number[][]`",
+    "top-level > binding `badGroup` init: expected `[number, number][]` but got `(number | \"x\" (string))[][]`",
+    "top-level > binding `badLetWidened` init: expected `[number, \"x\" (string)][]` but got `(number | string)[][]`",
+  ])
+}
+
+///|
+/// `x === y` with a `y` that cannot be nullish narrows `x` on the equal
+/// side (probed: tsc reports exactly the `bad…` cells). univer's
+/// `_getReusableScrollCacheState` guards `canvas.getPixelRatio()` with
+/// `canvas === previous.canvas`.
+test "equality with a non-nullish value narrows (eqnonnullish)" {
+  let src =
+    #|// @strict: true
+    #|
+    #|// `x === y` narrows `x` when `y` cannot be nullish: on the equal side `x`
+    #|// is not nullish either. The not-equal side learns nothing, a nullable `y`
+    #|// narrows nothing, and loose `==` against a `y` that may be `undefined`
+    #|// leaves `x` possibly `null` or `undefined`.
+    #|
+    #|interface C { w(): number }
+    #|interface P { canvas: C; ok: boolean }
+    #|declare const prev: P | undefined;
+    #|
+    #|export function okAfterGuard(canvas: C | undefined) {
+    #|  if (!(prev?.ok && canvas === prev.canvas && canvas.w() === 1)) return undefined;
+    #|  return canvas.w();
+    #|}
+    #|export function okInConjunction(canvas: C | undefined, p: P) {
+    #|  return canvas === p.canvas && canvas.w();
+    #|}
+    #|export function okIf(canvas: C | undefined, p: P) {
+    #|  if (canvas === p.canvas) { return canvas.w(); }
+    #|  return 0;
+    #|}
+    #|export function okNotEqual(canvas: C | undefined, p: P) {
+    #|  if (canvas !== p.canvas) { return 0; }
+    #|  return canvas.w();
+    #|}
+    #|export function okReversed(canvas: C | undefined, p: P) {
+    #|  if (p.canvas == canvas) { return canvas.w(); }
+    #|  return 0;
+    #|}
+    #|export function badElse(canvas: C | undefined, p: P) {
+    #|  if (canvas === p.canvas) { return 0; }
+    #|  return canvas.w();
+    #|}
+    #|export function badNullableOther(canvas: C | undefined, q: C | undefined) {
+    #|  if (canvas === q) { return canvas.w(); }
+    #|  return 0;
+    #|}
+    #|export function badLoose(canvas: C | null | undefined, q: C | undefined) {
+    #|  if (canvas == q) { return canvas.w(); }
+    #|  return 0;
+    #|}
+  assert_eq(issue_lines(src), [
+    "function badElse > call `w`: object is possibly `undefined`", "function badNullableOther > call `w`: object is possibly `undefined`",
+    "function badLoose > call `w`: object is possibly `undefined`",
+  ])
+}
+
+///|
+/// `"k" in x` with no union member declaring `k` is `x & Record<"k",
+/// unknown>`; a member whose members are not all known (a lib DOM type)
+/// keeps the union as it was (excalidraw's `"clipboardData" in event`).
+test "in on a union that never declares the key adds it (inrecord)" {
+  let src =
+    #|// @strict: true
+    #|
+    #|// `"k" in x` when no member of `x`'s union declares `k` narrows `x` to
+    #|// `x & Record<"k", unknown>` (TS 4.9), so `x.k` reads as `unknown`. A
+    #|// member the check cannot rule out keeps the key: a lib DOM type, which
+    #|// declares it, wins the usual filter instead.
+    #|
+    #|interface A { a: number }
+    #|interface B { b: string }
+    #|type AB = A | B;
+    #|
+    #|export function okInUndeclared(p: AB | undefined): boolean {
+    #|  return !!p && "generated" in p && Boolean(p.generated);
+    #|}
+    #|export function okInUndeclaredSingle(p: A) {
+    #|  if ("extra" in p) { return p.extra; }
+    #|  return undefined;
+    #|}
+    #|export function okUnionElse(p: A | B) {
+    #|  if (!("k" in p)) { return 0; }
+    #|  return p.k;
+    #|}
+    #|export function okUnionKeepsOwn(p: A | B) {
+    #|  if ("k" in p && "a" in p) { return p.a; }
+    #|  return 0;
+    #|}
+    #|export function okLibUnion(event: ClipboardEvent | DragEvent) {
+    #|  if ("clipboardData" in event && event.clipboardData) {
+    #|    return event.clipboardData.getData("text");
+    #|  }
+    #|  return "";
+    #|}
+    #|export function badInUndeclaredElse(p: A) {
+    #|  if ("extra" in p) { return 0; }
+    #|  return p.extra;
+    #|}
+    #|export function badUnionUnknown(p: A | B): number {
+    #|  if ("k" in p) { const n: number = p.k; return n; }
+    #|  return 0;
+    #|}
+    #|export function badUnionOtherMember(p: A | B) {
+    #|  if ("k" in p) { return p.a; }
+    #|  return 0;
+    #|}
+  assert_eq(issue_lines(src), [
+    "function badInUndeclaredElse > PropAccess `.extra`: property `extra` does not exist on `A`",
+    "function badUnionUnknown > binding `n` init: expected `number` but got `unknown`",
+  ])
+}
+
+///|
+/// A string destructures as its characters (univer's `_colorWithOpacity`:
+/// `const [, r, g, b] = hex`).
+test "a string destructures as strings (stringdestructure)" {
+  let src =
+    #|// @strict: true
+    #|
+    #|// A string destructures as its characters: each element is a `string`,
+    #|// and a rest element is a `string[]`.
+    #|
+    #|declare const hex: string;
+    #|
+    #|export function okStringDestructure() {
+    #|  const [, r, g] = hex;
+    #|  return Number.parseInt(r + g, 16);
+    #|}
+    #|export function okStringDestructureRest() {
+    #|  const [first, ...rest] = hex;
+    #|  const s: string = first;
+    #|  const t: string[] = rest;
+    #|  return s + t.join("");
+    #|}
+    #|export function okLiteralDestructure() {
+    #|  const [c] = "ab";
+    #|  const s: string = c;
+    #|  return s;
+    #|}
+    #|export function badStringDestructure() {
+    #|  const [a] = hex;
+    #|  const n: number = a;
+    #|  return n;
+    #|}
+    #|export function badStringRest() {
+    #|  const [, ...rest] = hex;
+    #|  const n: number[] = rest;
+    #|  return n;
+    #|}
+  assert_eq(issue_lines(src), [
+    "function badStringDestructure > binding `n` init: expected `number` but got `string`",
+    "function badStringRest > binding `n` init: expected `number[]` but got `string[]`",
+  ])
+}
+
+///|
+/// An unannotated class field initialized by `new Map<K, V>()` (or a
+/// `Set`) is that instance: univer's `private _scrollCacheStates = new
+/// Map<string, IScrollCacheState | null>()` read as `any`, so the `canvas
+/// === previous.canvas` guard after `const previous =
+/// this._scrollCacheStates.get(key)` had nothing to narrow by. The
+/// top-level cells are MISSes: typing every `new Map<K, V>()` exposed
+/// relations this checker does not have yet.
+test "new Map with written type arguments is typed (newcollection)" {
+  let src =
+    #|// @strict: true
+    #|// @target: esnext
+    #|
+    #|// `new Map<K, V>()`, `new Set<T>()` and their weak variants are instances
+    #|// of the written arguments, at top level and as an unannotated class
+    #|// field's initializer; `get` adds `undefined`. A field holding a `Set`
+    #|// or a `WeakMap` is the same instance as a `Map` field.
+    #|
+    #|interface St { ok: boolean }
+    #|
+    #|const q1 = new Map<string, number>();
+    #|export const okMapGet: number | undefined = q1.get("k");
+    #|export const badMapGet: string = q1.get("k");
+    #|
+    #|const q2 = new Set<string>();
+    #|export const okSetHas: boolean = q2.has("a");
+    #|export const badSetHas: string = q2.has("a");
+    #|
+    #|const w = new WeakMap<object, number>();
+    #|export const okWeakGet: number | undefined = w.get({});
+    #|export const badWeakGet: string | undefined = w.get({});
+    #|
+    #|export class Holder {
+    #|  private _m = new Map<string, St | null>();
+    #|  private _s = new Set<string>();
+    #|  okField(k: string): St | null | undefined { return this._m.get(k); }
+    #|  badField(k: string): number { return this._m.get(k); }
+    #|  okSetField(k: string): boolean { return this._s.has(k); }
+    #|  badSetField(k: string): string { return this._s.has(k); }
+    #|}
+    #|export class Guarded {
+    #|  private _states = new Map<string, St | null>();
+    #|  okEqualityAfterLookup(key: string, cur: St | undefined) {
+    #|    const previous = this._states.get(key);
+    #|    if (!(previous?.ok && cur === previous)) return false;
+    #|    return cur.ok;
+    #|  }
+    #|}
+  assert_eq(issue_lines(src), [
+    "function Holder.badField > return: type `St | null | undefined` is not assignable to type `number`",
+    "function Holder.badSetField > return: expected `string` but got `boolean`",
+  ])
+}
+
+///|
+/// A function declaration in a body is hoisted, at each of the places a
+/// body is checked: a function, a function expression, a contextually
+/// typed arrow, a bare block and a loop body, and an `if` branch. Unhoisted, `later(key)` was `any` and `s.body =
+/// later(key)` kept `s.body`'s declared `Top | undefined` (effect's
+/// `revivePersisted`).
+test "function declarations hoist in bodies (hoistfn)" {
+  let src =
+    #|// @strict: true
+    #|
+    #|// A function declaration in a body is hoisted: a call made before it, or
+    #|// from a function declared before it, sees its signature. After
+    #|// `s.body = g(k)` with `g(k): Top`, `s.body` is a `Top`.
+    #|
+    #|interface Top { t: number }
+    #|declare function make(k: string): Top;
+    #|class Slot { body: Top | undefined; constructor(readonly key: string) {} }
+    #|declare const slots: Slot[];
+    #|
+    #|export function okHoistedInNested(): Top {
+    #|  const slots = new Map<string, Slot>();
+    #|  function resolve(key: string): Top {
+    #|    let slot = slots.get(key);
+    #|    if (slot === undefined) { slot = new Slot(key); }
+    #|    slot.body = later(key);
+    #|    return slot.body;
+    #|  }
+    #|  function later(k: string): Top { return make(k); }
+    #|  return resolve("a");
+    #|}
+    #|export function okHoistedSimple(s: Slot): Top {
+    #|  s.body = later2("k");
+    #|  return s.body;
+    #|  function later2(k: string): Top { return make(k); }
+    #|}
+    #|export function okHoistedInArrow() {
+    #|  const f = (s: Slot): Top => {
+    #|    s.body = later3("k");
+    #|    return s.body;
+    #|    function later3(k: string): Top { return make(k); }
+    #|  };
+    #|  return f;
+    #|}
+    #|export const okHoistedInFunctionExpression = function (s: Slot): Top {
+    #|  s.body = later5("k");
+    #|  return s.body;
+    #|  function later5(k: string): Top { return make(k); }
+    #|};
+    #|export function okHoistedInBlock(s: Slot, c: boolean): Top {
+    #|  if (c) {
+    #|    s.body = later6("k");
+    #|    return s.body;
+    #|    function later6(k: string): Top { return make(k); }
+    #|  }
+    #|  return make("x");
+    #|}
+    #|export const okHoistedInCallback: Top[] = slots.map((s) => {
+    #|  s.body = later7("k");
+    #|  const t: Top = s.body;
+    #|  return t;
+    #|  function later7(k: string): Top { return make(k); }
+    #|});
+    #|export function okHoistedInBareBlock(s: Slot): Top {
+    #|  {
+    #|    s.body = later8("k");
+    #|    const t: Top = s.body;
+    #|    return t;
+    #|    function later8(k: string): Top { return make(k); }
+    #|  }
+    #|}
+    #|export function okHoistedInLoop(s: Slot): Top {
+    #|  while (true) {
+    #|    s.body = later9("k");
+    #|    const t: Top = s.body;
+    #|    return t;
+    #|    function later9(k: string): Top { return make(k); }
+    #|  }
+    #|}
+    #|export function badHoistedReturnUsed(s: Slot): string {
+    #|  s.body = later4("k");
+    #|  return s.body;
+    #|  function later4(k: string): Top { return make(k); }
+    #|}
+  assert_eq(issue_lines(src), [
+    "function badHoistedReturnUsed > return: expected `string` but got `Top`",
+  ])
+}
+
+///|
+/// A function type's return is compared structurally, and `Map` / `Set`
+/// are their readonly views: `() => { a: number }` against `() => A` was
+/// reported on main, and effect's `makeHooks(() => ({ occurrences }), …)`
+/// once `new Map<K, V>()` was typed.
+test "a function type's return is structural (fnreturnstruct)" {
+  let src =
+    #|// @strict: true
+    #|// @target: esnext
+    #|
+    #|// A function type's return is compared structurally: `() => { a: number }`
+    #|// is a `() => A` for `interface A { a: number }`. A mutable `Map` or `Set`
+    #|// is its readonly view, there and anywhere else.
+    #|
+    #|interface A { a: number }
+    #|interface RO { readonly r: ReadonlyMap<string, number> }
+    #|
+    #|declare const g: () => { a: number };
+    #|export const okPlain: () => A = g;
+    #|declare const g2: () => { r: Map<string, number> };
+    #|export const okMapReturn: () => RO = g2;
+    #|declare const g3: () => Map<string, number>;
+    #|export const okMapToReadonly: () => ReadonlyMap<string, number> = g3;
+    #|declare const g4: () => Set<string>;
+    #|export const okSetToReadonly: () => ReadonlySet<string> = g4;
+    #|declare const g5: () => { a: string };
+    #|export const badPlain: () => A = g5;
+    #|
+    #|interface Hooks<In, Out> { get: () => Out; update: (i: In) => void }
+    #|declare function makeHooks<In, Out>(get: () => Out, update: (i: In) => void): Hooks<In, Out>;
+    #|interface FS { readonly occurrences: ReadonlyMap<string, number> }
+    #|export function okHooks(): Hooks<string, FS> {
+    #|  const occurrences = new Map<string, number>();
+    #|  return makeHooks(() => ({ occurrences }), (w: string) => { occurrences.set(w, 1); });
+    #|}
+  assert_eq(issue_lines(src), [
+    "top-level > binding `badPlain` init: expected `() => A` but got `() => { a: string }`",
+  ])
+}
+
+///|
+/// A get-or-create callback's return reads the reassigned `let` as
+/// unknown rather than by its `get` initializer (effect's
+/// `layerBackingMemory`).
+test "a reassigned let does not type a callback's return (reassignedreturn)" {
+  let src =
+    #|// @strict: true
+    #|
+    #|// A local callback's return type comes from its body, and a `let` it
+    #|// assigns again (get-or-create) is not read by its initializer: here the
+    #|// `undefined` from `get` is gone by the `return`.
+    #|
+    #|declare function sync<A>(f: () => A): A;
+    #|declare function later<A>(f: (n: number) => A): A;
+    #|
+    #|export const okGetOrCreate = sync(() => {
+    #|  const stores = new Map<string, Map<string, number>>();
+    #|  const getStore = (id: string) => {
+    #|    let store = stores.get(id);
+    #|    if (store === undefined) {
+    #|      store = new Map<string, number>();
+    #|      stores.set(id, store);
+    #|    }
+    #|    return store;
+    #|  };
+    #|  return {
+    #|    make: (id: string) =>
+    #|      later((n) => {
+    #|        const map = getStore(id);
+    #|        return { clear: () => map.clear(), n };
+    #|      })
+    #|  };
+    #|});
+  assert_eq(issue_lines(src), [])
+}
+
+///|
+/// A target ending in a rest parameter accepts a source of any length, for
+/// functions and constructors (univer's `UnitCtor = new (...args: any[])
+/// => UnitModel`, which `new () => UnitModel` was reported against).
+test "a rest-parameter target accepts any arity (resttarget)" {
+  let src =
+    #|// @strict: true
+    #|
+    #|// A target ending in a rest parameter accepts a source of any length, for
+    #|// a function type and a constructor type alike: each source parameter past
+    #|// the target's fixed ones takes the rest's element type.
+    #|
+    #|class U { u = 1 }
+    #|type UnitCtor = new (...args: any[]) => U;
+    #|declare function take(ctor: UnitCtor): void;
+    #|
+    #|declare const c0: new () => U;
+    #|export const okCtorNone: UnitCtor = c0;
+    #|export function okCtorArg() { take(c0); }
+    #|declare const c2: new (a: number, b: string) => U;
+    #|export const okCtorTwo: UnitCtor = c2;
+    #|declare const f2: (a: number, b: string) => U;
+    #|export const okFnRest: (...args: any[]) => U = f2;
+    #|declare const f1: (a: number) => U;
+    #|export const okRestElem: (...args: number[]) => U = f1;
+    #|
+    #|declare const cx: new () => number;
+    #|export const badCtorReturn: UnitCtor = cx;
+    #|export const badRestFixed: (x: string, ...rest: any[]) => U = f1;
+    #|export const badRestElem: (...args: number[]) => U = f2;
+  assert_eq(issue_lines(src), [
+    "top-level > binding `badCtorReturn` init: expected `new (...) => U` but got `new (...) => number`",
+    "top-level > binding `badRestFixed` init: expected `(string, type) => U` but got `(number) => U`",
+    "top-level > binding `badRestElem` init: expected `(type) => U` but got `(number, string) => U`",
+  ])
+}
+
+///|
+/// `x = a ?? b` with a `b` that cannot be nullish narrows a `V | undefined`
+/// binding to `V`, as tsc does (probed: it reports exactly the `bad…`
+/// cell). univer's `LanguageDetector.detect` assigns
+/// `LANG_MAP_TO_HYPHEN_LANG[francLang] ?? Lang.UNKNOWN` to a `Map.get`
+/// result and returns it, and the left read is `any` here.
+test "assigning a coalesce with a never-nullish right side narrows (coalesceassign)" {
+  let src =
+    #|// @strict: true
+    #|enum Lang { A = "a", UNKNOWN = "unknown" }
+    #|const M: Record<string, Lang> = { a: Lang.A };
+    #|export function okNarrowedByCoalesce(m: Map<string, Lang>, k: string): Lang {
+    #|  let lang = m.get(k);
+    #|  if (lang) { return lang; }
+    #|  lang = M[k] ?? Lang.UNKNOWN;
+    #|  m.set(k, lang);
+    #|  return lang;
+    #|}
+    #|export function okCoalesceLiteral(m: Map<string, string>, k: string): string {
+    #|  let v = m.get(k);
+    #|  v = v ?? "none";
+    #|  return v;
+    #|}
+    #|export function okCoalesceObject(m: Map<string, { a: number }>, k: string): { a: number } {
+    #|  let v = m.get(k);
+    #|  v = v ?? { a: 1 };
+    #|  return v;
+    #|}
+    #|const S: Record<string, string> = {};
+    #|const O: Record<string, { a: number }> = {};
+    #|export function okRecordLiteral(m: Map<string, string>, k: string): string {
+    #|  let v = m.get(k);
+    #|  v = S[k] ?? "none";
+    #|  return v;
+    #|}
+    #|export function okRecordObject(m: Map<string, { a: number }>, k: string): { a: number } {
+    #|  let v = m.get(k);
+    #|  v = O[k] ?? { a: 1 };
+    #|  return v;
+    #|}
+    #|export function badCoalesceNullable(m: Map<string, string>, k: string, d: string | undefined): string {
+    #|  let v = m.get(k);
+    #|  v = v ?? d;
+    #|  return v;
+    #|}
+  assert_eq(issue_lines(src), [
+    "function badCoalesceNullable > return: type `string | undefined` is not assignable to type `string`",
   ])
 }

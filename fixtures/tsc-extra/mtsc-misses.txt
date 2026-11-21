@@ -54,3 +54,11 @@ tsIgnoreCoversNextCodeLine:badDirectiveAfterError  mtsc's reports carry no line,
 tsIgnoreCoversNextCodeLine:badLaterLineOfStatement  same cause as `badDirectiveAfterError`: a statement that starts on a directive's line drops everything it reports, including a report on its later lines
 callbackOverUnsolvedBinder:badContextualNumber  a type parameter only a callback mentions is not inferred from the type the call is assigned to; the callback is left unchecked rather than typed with `any`
 callbackOverUnsolvedBinder:badNoContext  same cause as `badContextualNumber`: with nothing to infer it from, tsc gives the type parameter `unknown`, and the callback is left unchecked here
+inOperatorUndeclaredOnUnion:badUnionOtherMember  a property of `(A | B) & Record<"k", unknown>` that only one union member declares is not reported: the intersection answers through its `Record` part
+newCollectionWithTypeArgs:badMapGet  a top-level `new Map<K, V>()` is still `any` here: only a class field's initializer is typed by its written arguments, because typing it everywhere exposed a `switch` narrowing through an `Extract` alias and a rest-tuple callback relation this checker does not have
+newCollectionWithTypeArgs:badSetHas  same cause as `badMapGet`, for `new Set<T>()`
+newCollectionWithTypeArgs:badWeakGet  same cause as `badMapGet`, for `new WeakMap<K, V>()`
+recordStringIndexRead:badRead  a `Record<string, V>` read with a `string`-typed key is `any` here: typing it as `V` needs TS 4.7's element-access narrowing (`typeof obj[key] === "string"` narrowing `obj[key]`), and without it `controlFlowComputedPropertyNames` is a false positive
+recordStringIndexRead:badPropertyKey  same cause as `badRead`, for a `number` key on a `Record<PropertyKey, V>`
+recordStringIndexRead:badAlias  same cause as `badRead`, through a type alias to the `Record`
+recordStringIndexRead:badAnyCoalesce  `x = a ?? b` with a never-nullish `b` narrows `x` even when `a` is `any`, where tsc's `any ?? b` is `any` and leaves the declared type; the narrowing exists because a `Record<string, V>` read is `any` here, and the two cannot be told apart

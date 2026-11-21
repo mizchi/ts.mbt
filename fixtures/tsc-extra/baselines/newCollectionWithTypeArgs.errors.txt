@@ -1,0 +1,60 @@
+newCollectionWithTypeArgs.ts(10,14): error TS2322: Type 'number | undefined' is not assignable to type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+newCollectionWithTypeArgs.ts(14,14): error TS2322: Type 'boolean' is not assignable to type 'string'.
+newCollectionWithTypeArgs.ts(18,14): error TS2322: Type 'number | undefined' is not assignable to type 'string | undefined'.
+  Type 'number' is not assignable to type 'string'.
+newCollectionWithTypeArgs.ts(24,33): error TS2322: Type 'St | null | undefined' is not assignable to type 'number'.
+  Type 'undefined' is not assignable to type 'number'.
+newCollectionWithTypeArgs.ts(26,36): error TS2322: Type 'boolean' is not assignable to type 'string'.
+
+
+==== newCollectionWithTypeArgs.ts (5 errors) ====
+    // `new Map<K, V>()`, `new Set<T>()` and their weak variants are instances
+    // of the written arguments, at top level and as an unannotated class
+    // field's initializer; `get` adds `undefined`. A field holding a `Set`
+    // or a `WeakMap` is the same instance as a `Map` field.
+    
+    interface St { ok: boolean }
+    
+    const q1 = new Map<string, number>();
+    export const okMapGet: number | undefined = q1.get("k");
+    export const badMapGet: string = q1.get("k");
+                 ~~~~~~~~~
+!!! error TS2322: Type 'number | undefined' is not assignable to type 'string'.
+!!! error TS2322:   Type 'undefined' is not assignable to type 'string'.
+    
+    const q2 = new Set<string>();
+    export const okSetHas: boolean = q2.has("a");
+    export const badSetHas: string = q2.has("a");
+                 ~~~~~~~~~
+!!! error TS2322: Type 'boolean' is not assignable to type 'string'.
+    
+    const w = new WeakMap<object, number>();
+    export const okWeakGet: number | undefined = w.get({});
+    export const badWeakGet: string | undefined = w.get({});
+                 ~~~~~~~~~~
+!!! error TS2322: Type 'number | undefined' is not assignable to type 'string | undefined'.
+!!! error TS2322:   Type 'number' is not assignable to type 'string'.
+    
+    export class Holder {
+      private _m = new Map<string, St | null>();
+      private _s = new Set<string>();
+      okField(k: string): St | null | undefined { return this._m.get(k); }
+      badField(k: string): number { return this._m.get(k); }
+                                    ~~~~~~
+!!! error TS2322: Type 'St | null | undefined' is not assignable to type 'number'.
+!!! error TS2322:   Type 'undefined' is not assignable to type 'number'.
+      okSetField(k: string): boolean { return this._s.has(k); }
+      badSetField(k: string): string { return this._s.has(k); }
+                                       ~~~~~~
+!!! error TS2322: Type 'boolean' is not assignable to type 'string'.
+    }
+    export class Guarded {
+      private _states = new Map<string, St | null>();
+      okEqualityAfterLookup(key: string, cur: St | undefined) {
+        const previous = this._states.get(key);
+        if (!(previous?.ok && cur === previous)) return false;
+        return cur.ok;
+      }
+    }
+    

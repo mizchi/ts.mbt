@@ -167,11 +167,24 @@ fn func_params_assignable(
       _ => false
     })
   let s_fixed = if s_trailing_rest { s_len - 1 } else { s_len }
+  // A TARGET ending in a rest parameter of a plain array type accepts a
+  // source of any length: each source parameter past the target's fixed
+  // ones takes the rest's element (`(a: number, b: string) => U` is a
+  // `(...args: any[]) => U`, and `new () => U` a `new (...args: any[]) =>
+  // U`, univer's `UnitCtor`).
+  let t_rest_elem = if t_len > 0 && !s_trailing_rest {
+    match t_params[t_len - 1] {
+      Rest(_) as r => rest_element_type(r)
+      _ => None
+    }
+  } else {
+    None
+  }
   if s_trailing_rest {
     if t_len < s_fixed {
       return false
     }
-  } else if t_len < s_len {
+  } else if t_len < s_len && t_rest_elem is None {
     // A source function may declare more parameters than the target so
     // long as each surplus trailing parameter is elidable. TS treats a
     // `void` (or `undefined`-accepting) parameter as omittable, so e.g.
@@ -194,6 +207,19 @@ fn func_params_assignable(
     } else {
       is_assignable_to_inner(b, a, bivariant_params)
     }
+  }
+  match t_rest_elem {
+    Some(elem) => {
+      let t_fixed = t_len - 1
+      for i in 0..<s_len {
+        let t_i = if i < t_fixed { t_params[i] } else { elem }
+        if !variance_ok(s_params[i], t_i) {
+          return false
+        }
+      }
+      return true
+    }
+    None => ()
   }
 
   for i in 0..<shared {
@@ -1080,23 +1106,13 @@ fn is_assignable_to_inner(
     (Array(s), Rest(t)) => is_assignable_to_inner(s, t, bivariant_params)
     // Constructor types: `new (...) => T`. Abstract constructors are a
     // subtype of non-abstract constructors (conservative approximation).
-    (Constructor(s_params, s_ret, _), Constructor(t_params, t_ret, _)) => {
-      if s_params.length() != t_params.length() {
-        return false
-      }
-      for i in 0..<s_params.length() {
-        let ok = if bivariant_params {
-          is_assignable_to_inner(s_params[i], t_params[i], bivariant_params) ||
-          is_assignable_to_inner(t_params[i], s_params[i], bivariant_params)
-        } else {
-          is_assignable_to_inner(t_params[i], s_params[i], bivariant_params)
-        }
-        if !ok {
-          return false
-        }
-      }
+    //
+    // The parameter lists are related as a function's are: `new () => U` is
+    // a `new (...args: any[]) => U` (univer's `UnitCtor`), which an
+    // equal-length requirement reported, as tsc does not.
+    (Constructor(s_params, s_ret, _), Constructor(t_params, t_ret, _)) =>
+      func_params_assignable(s_params, t_params, bivariant_params) &&
       is_assignable_to_inner(s_ret, t_ret, bivariant_params)
-    }
     // A constructor type is callable as a function (via Reflect.construct etc.)
     (Constructor(s_params, s_ret, _), Func(t_params, t_ret)) => {
       if s_params.length() != t_params.length() {
@@ -1202,6 +1218,12 @@ fn is_assignable_to_inner(
     // nominal.
     (Named(a), Applied(b, args)) | (Applied(b, args), Named(a)) =>
       a == b && args.length() > 0 && args.iter().all(fn(x) { x is Any })
+    // A mutable keyed collection is its readonly view: `Map<K, V>` assigns
+    // to `ReadonlyMap<K, V>` (the readonly interface is the mutable one's
+    // read members), and the reverse does not hold.
+    (Applied("Map", [sk, sv]), Applied("ReadonlyMap", [tk, tv])) =>
+      is_assignable_to_inner(sk, tk, bivariant_params) &&
+      is_assignable_to_inner(sv, tv, bivariant_params)
     (Applied(a, args_a), Applied(b, args_b)) => {
       if a != b {
         return false
