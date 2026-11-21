@@ -8018,8 +8018,10 @@ product surfaces now.
     `V` fixed it at FP 0 on every real package, and the ORACLE rejected it:
     `controlFlowComputedPropertyNames` guards `typeof obj[key] === "string"`
     over a `Record<string, unknown>` and then calls a method. That is TS
-    4.7's element-access narrowing, where a key that is a parameter or a
-    `const` nobody reassigns makes `obj[key]` a reference. While the read
+    5.5's narrowing of constant indexed accesses, where a key that is a
+    parameter or a `const` nobody reassigns makes `obj[key]` a reference
+    (TS 4.7 narrowed only literal and unique-symbol keys; #326's review
+    corrected the release). While the read
     was `any`, nothing needed the narrowing. The read is filed with that
     dependency, and the tsc-extra case `recordStringIndexRead` shows both
     halves.
@@ -8039,6 +8041,60 @@ product surfaces now.
     `binding_init_type`, the helper the declaration checker uses. So
     `let s = "x"` is a `string` and still fails a `"x"` slot, as in tsc.
     One the block assigns again, or one with no initializer, abstains.
+  Batch HQ is a parser fix for univer's JSX and the review items carried
+  from #325 and #326. univer ui goes 25 -> 24, with no report at a new site
+  and the oracle unchanged.
+  - **Lexer diagnostics inside JSX text are artifacts.** The lexer runs over
+    the whole file before the parser, so it reads JSX text and multi-line
+    attribute strings as JavaScript. univer's
+    `univer-tracking-[0.08em]` inside a multi-line `className` was "invalid
+    digit in a binary or octal numeric literal", and `08`, `017`, `0x`, a
+    backtick and `¬` in JSX text were each a lexer error. tsc accepts all of
+    them (probed).
+    - TS1002 already had the fix, and the other lexer diagnostics did not:
+      unterminated strings were forgiven inside a JSX element's range.
+    - Each lexer diagnostic now records the start of the token that raised
+      it (`Lexer::note_diag`). In JSX mode it waits for the parse like
+      TS1002, and an element forgives the ones in its range.
+    - A `{…}` payload is JavaScript, re-lexed by a sub-parser, so the
+      sub-parser reports what its parse read. That holds whether or not the
+      parse succeeded: `{[0b2]}` fails at the `2` the lexer split off, after
+      the `0b` it reported. TS1002 keeps its success-only rule, since an
+      unterminated string swallows what follows.
+    - A `declare module "m"` body's diagnostics come back from its child
+      parser, as TS1002 already did.
+    - The position had to be the token's start, not the cursor: a diagnostic
+      raised at the offending character sits exactly at the next token's
+      start, so "did the parse read this" answered no.
+  - **#325's outside-diff review.** A line comment in a JSX payload ended at
+    LF and CR only, so `{ // note` + LS + `f("x") }` lost everything after it,
+    and the old binary reported nothing in the rest of the file. The lexer
+    already ended at LS and PS; the source scanner now uses the same
+    `is_line_break_unit`. The tuple-rest erasure item was implemented and
+    reverted: a callback against a tuple rest is not checked at all here,
+    for arity or element types, so its mutation survived. The cells are
+    declared MISSes in tsc-extra's `tupleRestCallbackParameters`.
+  - **#326's review.**
+    - Two rest parameters relate element to element. #326 had introduced
+      a false positive for a constructor with a rest parameter against a
+      narrower return.
+    - A field's `new Map<K, V>()` is not the lib `Map` when the module binds
+      `Map` as a value, a second false positive from #326.
+    - A class target's methods count in the function-return fallback, and
+      declining class targets was the first version. Probing the legal
+      neighbour showed that declining class targets reintroduces a false
+      positive main has: `() => Target` as `() => Source`, where the source
+      class has one more method. So the fallback now requires every instance
+      method of the target class and its bases on the source. It abstains
+      when the source's members are not all known.
+    - TS 5.5, not TS 4.7, is the narrowing a typed `Record<string, V>` read
+      needs.
+    - The `Set` → `ReadonlySet` false positive did not reproduce. What the
+      probe found instead is wider and on main: a lib generic written with
+      its type arguments is not compared by them. `Set<string>` against
+      `Set<number>`, `Array<string>` against `number[]` and
+      `Promise<string>` against `Promise<number>` are all silent. The cells
+      are declared MISSes in tsc-extra's `libGenericTypeArguments`.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

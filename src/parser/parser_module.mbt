@@ -1002,6 +1002,14 @@ fn Parser::parse_ambient_external_module_decl_with_spec(
           module_.grammar_misuses.contains("unterminated string literal") {
           self.grammar_misuses.push("unterminated string literal")
         }
+        // The lexer's other diagnostics come back the same way.
+        if self.allow_jsx {
+          for m in module_.grammar_misuses {
+            if is_lexer_diag_message(m) {
+              self.grammar_misuses.push(m)
+            }
+          }
+        }
         Some((spec, module_, body_source))
       } else {
         self.skip_declaration_block()
@@ -4459,6 +4467,18 @@ fn Parser::parse_module_with_seeded_const_values_internal(
   // TS1002 in JSX mode: whatever no JSX element forgave.
   if self.jsx_unterminated_strings.length() > 0 {
     self.grammar_misuses.push("unterminated string literal")
+  }
+  // And the lexer's other diagnostics: each reported once per occurrence,
+  // except the four the lexer reports once per file.
+  let once : Map[String, Unit] = Map([])
+  for d in self.jsx_lexer_diags {
+    if is_once_per_file_lexer_diag(d.1) {
+      if once.contains(d.1) {
+        continue
+      }
+      once[d.1] = ()
+    }
+    self.grammar_misuses.push(d.1)
   }
   self.record_unused_private_members(module_head)
   {

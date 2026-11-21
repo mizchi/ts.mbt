@@ -247,6 +247,7 @@ guide to whether the behaviour will change.
 | inference | `nakedUnionCandidateReduction` | That candidate is reduced with the call's other candidates like any of one priority (literals of one primitive unioned, otherwise the leftmost kept unless it is a subtype of the next), and the argument's members a non-naked member matches identically or closely (`number[]` against `Array`) are taken out first | TS2322 TS2345 | — |
 | inference | `optionalCallbackContextAndGenericInterfaceMethods` | An optional method-typed property as a contextual type, generic interface methods, an overload taking `Object` | TS2322 TS2339 TS2345 | — |
 | inference | `overloadSetAsCallbackAndMissingAwait` | An overload set as a callback, and `Promise<string>` where `string` is expected | TS2322 TS2345 | — |
+| inference | `tupleRestCallbackParameters` | A callback parameter typed by a tuple rest takes one parameter per element and refuses a callback requiring more, also when an element is an unsolved type parameter | TS2322 TS2345 | — |
 | inference | `reassignedLocalInCallbackReturn` | A local callback's inferred return does not read a `let` it assigns again by its initializer: a get-or-create returns the non-`undefined` value | — | — |
 | inference | `staticFactoryBinderBeforeAliasExpansion` | A static factory returning its own type parameter narrows nothing, also when a module alias shares the parameter's name and when the return reaches the parameter through an alias (`Identity<T>`); a return built from the parameter (`Box<T>`) still narrows | TS18047 | — |
 | inference | `staticFactoryCallThroughClass` | Assigning `Factory.create()` narrows a nullable binding, also one declared through `Nullable<T>`; an `any` assignment keeps the declared type; an auto-typed `let b = null` then a value of unnamed type is non-nullish | TS18047 TS18048 TS2322 | — |
@@ -262,6 +263,9 @@ guide to whether the behaviour will change.
 | parser | `contextualKeywordDeclareAsInterfaceName` | `interface declare<T>` | accepted | — |
 | parser | `emptyTypeArgumentListInInstantiationExpression` | `fx<>` is TS1099, `fx<string>` is legal | TS1099 | `instantiationExpressions` |
 | parser | `heritageCallWithTypeArguments` | `extends TaggedError("E")<{ … }>` | accepted | — |
+| parser | `jsxPayloadLineCommentTerminators` | A line comment in a JSX `{…}` payload ends at LS and PS as at LF and CR, so the code after it is part of the payload | TS2345 | — |
+| parser | `jsxPayloadIsJavaScript` | A `{…}` payload inside a JSX element is JavaScript: a malformed numeric literal there is an error in a child, an attribute value and a nested element's payload | TS1125 TS1178 | — |
+| parser | `jsxTextIsNotJavaScript` | JSX text and a JSX attribute string are not JavaScript: `0.08em`, `08`, `017`, `0x`, a backtick and `¬` there are characters, and an attribute string may span lines | accepted | — |
 | parser | `lowercaseInstantiationExpressionArgument` | `g(fx<string>, 1)` | accepted | — |
 | parser | `newlineSeparatedGenericCallSignatures` | `<B>` on a new line begins a new call signature | accepted | — |
 | parser | `typeParameterAndNamespaceOfOneName` | `P.Encoded` names the namespace member when a type parameter is also `P` | accepted | — |
@@ -301,6 +305,7 @@ guide to whether the behaviour will change.
 | relations | `numericLiteralIntoNumericEnumMember` | A numeric literal type is assignable to a numeric enum only when a member holds its value (TS 5.0); `number`, a union of member values, and any literal against an enum with a computed member are | TS2322 | — |
 | relations | `privateMemberClassToNonNamingTargets` | A class with a `private` member into a union of bases, an object type, an interface; a target naming the member; a union source | TS2322 TS2739 TS2741 | — |
 | relations | `recursiveArrayAliasesRelateCoinductively` | `type A = A[]` and `type B = B[]` relate coinductively; `A[]` against `string[]` still fails where `A` meets `string` | TS2322 | — |
+| relations | `libGenericTypeArguments` | A lib generic written with type arguments (`Set<string>`, `Map<K, V>`, `Array<T>`, `Promise<T>`) is compared by them, also against its readonly view | TS2322 | — |
 | relations | `restParameterTargetAcceptsAnyArity` | A function or constructor type ending in a rest parameter accepts a source of any length, each surplus parameter taking the rest's element type (`new () => U` is a `new (...args: any[]) => U`) | TS2322 | — |
 | relations | `spreadArgumentAgainstNestedAliasUnion` | A spread argument's element relates to the rest parameter's element through every alias the target union's members name, as a plain argument does; a member no alias reaches is still TS2345 | TS2345 | — |
 | relations | `unionMemberOfInterfaceTarget` | An object member fits an interface member typed `S \| undefined` (or `S \| null`) structurally, member by member; a wrong type, a missing member and `null` into `undefined` do not | TS2322 | — |
@@ -311,10 +316,11 @@ guide to whether the behaviour will change.
 | types | `intersectionMemberFromEveryConstituent` | A member several constituents declare is the narrowest of their types (`string & "line"`), which discriminates; a declared member outranks an index signature | TS2322 TS2339 | — |
 | types | `keyofTupleAndTemplateInferNumberIndex` | `keyof` a tuple, `infer N extends number` in a template (`"01"` is not canonical) | TS2322 TS2345 | `templateLiteralTypes4` |
 | types | `newCollectionWithTypeArgs` | `new Map<K, V>()`, `new Set<T>()` and `new WeakMap<K, V>()` are instances of the written arguments, at top level and as an unannotated class field's initializer, and `get` adds `undefined` | TS2322 | — |
+| types | `newCollectionShadowedByValue` | `new Map<K, V>()` with a module value named `Map` is that value's class, not the lib collection | TS2322 | — |
 | types | `nonNullAssertionStripsAliasedVoid` | `x!` removes `null`, `undefined` and `void`, through an alias such as `Nullable<T> = T \| null \| undefined \| void`, and when the `void` is itself an alias | TS18048 TS18049 | — |
 | types | `objectSpreadOfUnenumerableSource` | An object literal spreading `any` is not missing members; one spreading a known shape is | TS2739 TS2741 | — |
 | types | `optionalAnyReadsAsAny` | An optional `any` member or parameter reads as `any`; an optional `number` or `unknown` keeps its `undefined` | TS18046 TS18048 | — |
-| types | `recordStringIndexRead` | `Record<string, V>` read with a `string` or `number` key is `V`, as the dotted read and the `{ [k: string]: V }` spelling are, alongside the TS 4.7 element-access narrowing that typing the read needs; `x = a ?? b` with a `b` that cannot be nullish narrows `x` | TS2322 | `controlFlowComputedPropertyNames` |
+| types | `recordStringIndexRead` | `Record<string, V>` read with a `string` or `number` key is `V`, as the dotted read and the `{ [k: string]: V }` spelling are, alongside the TS 5.5 narrowing of constant indexed accesses that typing the read needs; `x = a ?? b` with a `b` that cannot be nullish narrows `x` | TS2322 | `controlFlowComputedPropertyNames` |
 | types | `returnWithoutValueThroughAlias` | A bare `return;` or falling off the end is legal when the return type admits `undefined` or `void`, through an alias such as `Nullable<T>`; a `null`-only alias still needs a value | TS2322 TS2366 | — |
 | types | `stringArrayDestructuring` | A string destructures as its characters: each element is `string` and a rest element is `string[]` | TS2322 | — |
 | types | `templateInferPatternsInConditionals` | `infer` in a template with a fixed part or a bound, as a conditional's check type | TS2322 | `templateLiteralTypes4` |

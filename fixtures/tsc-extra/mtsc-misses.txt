@@ -58,7 +58,18 @@ inOperatorUndeclaredOnUnion:badUnionOtherMember  a property of `(A | B) & Record
 newCollectionWithTypeArgs:badMapGet  a top-level `new Map<K, V>()` is still `any` here: only a class field's initializer is typed by its written arguments, because typing it everywhere exposed a `switch` narrowing through an `Extract` alias and a rest-tuple callback relation this checker does not have
 newCollectionWithTypeArgs:badSetHas  same cause as `badMapGet`, for `new Set<T>()`
 newCollectionWithTypeArgs:badWeakGet  same cause as `badMapGet`, for `new WeakMap<K, V>()`
-recordStringIndexRead:badRead  a `Record<string, V>` read with a `string`-typed key is `any` here: typing it as `V` needs TS 4.7's element-access narrowing (`typeof obj[key] === "string"` narrowing `obj[key]`), and without it `controlFlowComputedPropertyNames` is a false positive
+recordStringIndexRead:badRead  a `Record<string, V>` read with a `string`-typed key is `any` here: typing it as `V` needs TS 5.5's narrowing of constant indexed accesses (`typeof obj[key] === "string"` narrowing `obj[key]` for a non-literal `key`), and without it `controlFlowComputedPropertyNames` is a false positive
 recordStringIndexRead:badPropertyKey  same cause as `badRead`, for a `number` key on a `Record<PropertyKey, V>`
 recordStringIndexRead:badAlias  same cause as `badRead`, through a type alias to the `Record`
 recordStringIndexRead:badAnyCoalesce  `x = a ?? b` with a never-nullish `b` narrows `x` even when `a` is `any`, where tsc's `any ?? b` is `any` and leaves the declared type; the narrowing exists because a `Record<string, V>` read is `any` here, and the two cannot be told apart
+newCollectionShadowedByValue:badUse  a field initialized from a class reached through a value alias (`const Map = CustomMap`) is `any` here, so its method's return is not checked
+tupleRestCallbackParameters:badTupleThree  a callback against a tuple-rest parameter (`(...xs: [string, number]) => void`) is not checked for arity
+tupleRestCallbackParameters:badTupleElement  same cause as `badTupleThree`: the callback's parameters are not typed from the tuple's elements
+tupleRestCallbackParameters:badGenericThree  same cause as `badTupleThree`, with an element that is an unsolved type parameter
+tupleRestCallbackParameters:badGenericElement  same cause as `badTupleElement`, with an element that is an unsolved type parameter
+libGenericTypeArguments:badSet  a lib generic written with type arguments is not compared by them here: `Set<string>` against `Set<number>` abstains, while `string[]` against `number[]` reports
+libGenericTypeArguments:badReadonlySet  same cause as `badSet`, against the readonly view
+libGenericTypeArguments:badMap  same cause as `badSet`, for `Map<K, V>`
+libGenericTypeArguments:badReadonlyMap  same cause as `badSet`, for `Map<K, V>` against `ReadonlyMap<K, V>`
+libGenericTypeArguments:badArray  same cause as `badSet`: `Array<string>` written with its argument is not compared against `number[]`
+libGenericTypeArguments:badPromise  same cause as `badSet`, for `Promise<T>`

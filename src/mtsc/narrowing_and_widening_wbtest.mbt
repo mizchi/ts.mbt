@@ -3433,8 +3433,15 @@ test "a function type's return is structural (fnreturnstruct)" {
     #|  const occurrences = new Map<string, number>();
     #|  return makeHooks(() => ({ occurrences }), (w: string) => { occurrences.set(w, 1); });
     #|}
+    #|class Source { tag = 1; }
+    #|class Target { tag = 1; required(): number { return 1; } }
+    #|declare const gs: () => Source;
+    #|export const badClassMethod: () => Target = gs;
+    #|declare const gt: () => Target;
+    #|export const okClassSubtype: () => Source = gt;
   assert_eq(issue_lines(src), [
     "top-level > binding `badPlain` init: expected `() => A` but got `() => { a: string }`",
+    "top-level > binding `badClassMethod` init: expected `() => Target` but got `() => Source`",
   ])
 }
 
@@ -3504,10 +3511,15 @@ test "a rest-parameter target accepts any arity (resttarget)" {
     #|export const badCtorReturn: UnitCtor = cx;
     #|export const badRestFixed: (x: string, ...rest: any[]) => U = f1;
     #|export const badRestElem: (...args: number[]) => U = f2;
+    #|declare const cr: new (...args: number[]) => { a: number; b: number };
+    #|export const okCtorBothRest: new (...args: number[]) => { a: number } = cr;
+    #|declare const cs: new (...args: string[]) => { a: number };
+    #|export const badCtorBothRest: new (...args: number[]) => { a: number } = cs;
   assert_eq(issue_lines(src), [
     "top-level > binding `badCtorReturn` init: expected `new (...) => U` but got `new (...) => number`",
     "top-level > binding `badRestFixed` init: expected `(string, type) => U` but got `(number) => U`",
     "top-level > binding `badRestElem` init: expected `(type) => U` but got `(number, string) => U`",
+    "top-level > binding `badCtorBothRest` init: expected `new (...) => { a: number }` but got `new (...) => { a: number }`",
   ])
 }
 
@@ -3559,4 +3571,20 @@ test "assigning a coalesce with a never-nullish right side narrows (coalesceassi
   assert_eq(issue_lines(src), [
     "function badCoalesceNullable > return: type `string | undefined` is not assignable to type `string`",
   ])
+}
+
+///|
+/// `new Map<K, V>()` as a field's initializer is the lib `Map` only when
+/// `Map` is not a value the module binds: with `const Map = CustomMap` it is
+/// a `CustomMap` (probed: tsc accepts `this._m.hello()`).
+test "a value named Map shadows the lib collection (newcollectionshadow)" {
+  let src =
+    #|// @strict: true
+    #|class CustomMap<K, V> { hello(): string { return "hi"; } }
+    #|const Map = CustomMap;
+    #|export class Holder {
+    #|  private _m = new Map<string, number>();
+    #|  okUse(): string { return this._m.hello(); }
+    #|}
+  assert_eq(issue_lines(src), [])
 }

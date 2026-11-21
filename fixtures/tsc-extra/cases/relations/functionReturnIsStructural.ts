@@ -26,3 +26,12 @@ export function okHooks(): Hooks<string, FS> {
   const occurrences = new Map<string, number>();
   return makeHooks(() => ({ occurrences }), (w: string) => { occurrences.set(w, 1); });
 }
+
+// A class target's methods count: a source class without `required()` is
+// not a `Target`, and one with every member and more is a `Source`.
+class Source { tag = 1; }
+class Target { tag = 1; required(): number { return 1; } }
+declare const gs: () => Source;
+export const badClassMethod: () => Target = gs;
+declare const gt: () => Target;
+export const okClassSubtype: () => Source = gt;

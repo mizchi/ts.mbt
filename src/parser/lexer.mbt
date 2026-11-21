@@ -207,6 +207,17 @@ pub struct Lexer {
   // (`className="\n  a b\n"` is legal). The parser forgives the ones a
   // JSX element turns out to contain — see `forgive_jsx_string_artifacts`.
   unterminated_string_starts : Array[Int32]
+  // Where each of the diagnostics above (all but TS1002, which has its own
+  // list) was raised, with its message. The lexer reads JSX text and
+  // attribute values as JavaScript, so in JSX mode the parser reports only
+  // the ones outside every JSX element it consumed — see
+  // `forgive_jsx_string_artifacts`.
+  diag_positions : Array[(Int32, String)]
+  // Where the token being scanned began: the position `note_diag` records,
+  // so a diagnostic raised at the offending character still lies inside
+  // the token, which is what a payload sub-parser's "did the parse read
+  // this" test and an element's range test both ask about.
+  mut token_start : Int32
   // TS1125: a radix prefix with no digits after it — `0x`, `0b`, `0o`.
   // The existing `invalid_radix_digit_count` answers a different
   // question ("a digit outside this radix"), so `0x` alone slipped
@@ -329,6 +340,8 @@ pub fn Lexer::new(src : String) -> Lexer {
     unterminated_regex: false,
     unterminated_string: false,
     unterminated_string_starts: [],
+    diag_positions: [],
+    token_start: 0,
     empty_radix_literal_count: 0,
     escaped_keyword_count: 0,
     unbalanced_regex_group_count: 0,
@@ -352,6 +365,13 @@ pub fn Lexer::new(src : String) -> Lexer {
     internal_marker_positions: {},
     jsdoc_at_pos: {},
   }
+}
+
+///|
+/// Records a diagnostic raised while scanning the current token, for
+/// `diag_positions`.
+fn Lexer::note_diag(self : Lexer, message : String) -> Unit {
+  self.diag_positions.push((self.token_start, message))
 }
 
 ///|
@@ -506,6 +526,7 @@ fn Lexer::skip_whitespace(self : Lexer) -> Unit {
                 None => {
                   // TS1010: end of file inside a block comment.
                   self.unterminated_block_comment = true
+                  self.note_diag("`*/` expected")
                   break
                 }
                 Some('*') =>
@@ -617,6 +638,7 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
           // `0o`). Three arms — hex, binary, octal — each of which
           // silently substituted 0, so the rule existed in none of them.
           self.empty_radix_literal_count += 1
+          self.note_diag("hexadecimal digit expected")
           value = 0.0
         }
         let mut is_bigint = false
@@ -669,8 +691,10 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
           }
         }
         match self.peek() {
-          Some(c) if c >= '2' && c <= '9' =>
+          Some(c) if c >= '2' && c <= '9' => {
             self.invalid_radix_digit_count = self.invalid_radix_digit_count + 1
+            self.note_diag("invalid digit in a binary or octal numeric literal")
+          }
           _ => ()
         }
         if !has_digit {
@@ -678,6 +702,7 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
           // `0o`). Three arms — hex, binary, octal — each of which
           // silently substituted 0, so the rule existed in none of them.
           self.empty_radix_literal_count += 1
+          self.note_diag("hexadecimal digit expected")
           value = 0
         }
         let mut is_bigint = false
@@ -745,8 +770,10 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
           }
         }
         match self.peek() {
-          Some(c) if c is ('8' | '9') =>
+          Some(c) if c is ('8' | '9') => {
             self.invalid_radix_digit_count = self.invalid_radix_digit_count + 1
+            self.note_diag("invalid digit in a binary or octal numeric literal")
+          }
           _ => ()
         }
         if !has_digit {
@@ -754,6 +781,7 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
           // `0o`). Three arms — hex, binary, octal — each of which
           // silently substituted 0, so the rule existed in none of them.
           self.empty_radix_literal_count += 1
+          self.note_diag("hexadecimal digit expected")
           value = 0
         }
         let mut is_bigint = false
@@ -790,6 +818,7 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
           // TS1121: legacy octal integer literals (`01`) are banned in
           // TypeScript regardless of target (scannerNumericLiteral2/3/8).
           self.legacy_octal_literal_count = self.legacy_octal_literal_count + 1
+          self.note_diag("octal literals are not allowed")
           // Recalculate as octal
           let mut octal_value = 0
           let mut mult = 1
@@ -808,6 +837,7 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
           // computed which of the two it is for the value; only the octal
           // half recorded anything.
           self.leading_zero_decimal_count = self.leading_zero_decimal_count + 1
+          self.note_diag("decimals with leading zeros are not allowed")
           return Int(value)
         }
       }
@@ -842,9 +872,13 @@ fn Lexer::scan_number(self : Lexer) -> TokenKind {
           // — scannerNumericLiteral4/6, scannerES3NumericLiteral4/6).
           match self.peek() {
             Some(d) if d >= '0' && d <= '9' => ()
-            _ =>
+            _ => {
               self.invalid_radix_digit_count = self.invalid_radix_digit_count +
                 1
+              self.note_diag(
+                "invalid digit in a binary or octal numeric literal",
+              )
+            }
           }
         } else {
           break
@@ -1030,6 +1064,7 @@ fn Lexer::scan_ident_with_escapes(self : Lexer, start : Int32) -> TokenKind {
   let kind = classify_ident_or_keyword(buf.to_string())
   if !(kind is Ident(_)) {
     self.escaped_keyword_count += 1
+    self.note_diag("keywords cannot contain escape characters")
   }
   kind
 }
@@ -1573,6 +1608,7 @@ fn Lexer::scan_string(self : Lexer, quote : Char) -> TokenKind {
                 // TS1125: `\x` demands exactly two hex digits in a string.
                 self.invalid_unicode_escape_count = self.invalid_unicode_escape_count +
                   1
+                self.note_diag("hexadecimal digit expected in a unicode escape")
                 buf.write_char('x')
               }
             }
@@ -1629,6 +1665,9 @@ fn Lexer::scan_string(self : Lexer, quote : Char) -> TokenKind {
                 if braced && (code > 0x10FFFF || code < 0) {
                   self.unicode_escape_overflow_count = self.unicode_escape_overflow_count +
                     1
+                  self.note_diag(
+                    "an extended unicode escape value must be between 0x0 and 0x10FFFF inclusive",
+                  )
                   buf.write_char('u')
                 } else {
                   write_codepoint(buf, code)
@@ -1637,6 +1676,7 @@ fn Lexer::scan_string(self : Lexer, quote : Char) -> TokenKind {
                 // TS1125: missing / non-hex digits (`\u{}`, `\u{-D}`, `\u{`).
                 self.invalid_unicode_escape_count = self.invalid_unicode_escape_count +
                   1
+                self.note_diag("hexadecimal digit expected in a unicode escape")
                 buf.write_char('u')
               }
             }
@@ -1862,9 +1902,13 @@ fn Lexer::validate_regex_unicode_escapes(self : Lexer, bs : String) -> Unit {
       if !ok || digits == 0 {
         self.invalid_unicode_escape_count = self.invalid_unicode_escape_count +
           1
+        self.note_diag("hexadecimal digit expected in a unicode escape")
       } else if code > 0x10FFFF {
         self.unicode_escape_overflow_count = self.unicode_escape_overflow_count +
           1
+        self.note_diag(
+          "an extended unicode escape value must be between 0x0 and 0x10FFFF inclusive",
+        )
       }
       i = j
     }
@@ -1983,6 +2027,7 @@ fn Lexer::scan_template_parts_with_raw(
       None => {
         // EOF before the closing backtick -- TS1160.
         self.unterminated_template = true
+        self.note_diag("unterminated template literal")
         break
       }
       Some(c) =>
@@ -2489,8 +2534,10 @@ fn Lexer::scan_regex(self : Lexer) -> TokenKind {
   }
   if !closed {
     self.unterminated_regex = true
+    self.note_diag("unterminated regular expression literal")
   } else if group_depth > 0 {
     self.unbalanced_regex_group_count += 1
+    self.note_diag("`)` expected in a regular expression literal")
   }
   let flags = StringBuilder()
   while true {
@@ -2572,6 +2619,7 @@ pub fn Lexer::next_token(self : Lexer) -> Token {
   self.skip_whitespace()
   let has_newline = self.newline_before_next
   let pos = self.pos
+  self.token_start = pos
   // Stamp annotation markers onto the upcoming token's position so
   // the parser can look them up after tokenize() finishes.
   if self.pending_pure_marker {
@@ -2680,6 +2728,7 @@ pub fn Lexer::next_token(self : Lexer) -> Token {
               // escape is an invalid character. Keep the permissive
               // identifier fallback so parsing continues.
               self.invalid_char_count += 1
+              self.note_diag("invalid character in source")
               self.pos -= 1
               self.scan_ident()
             }
@@ -2967,6 +3016,7 @@ pub fn Lexer::next_token(self : Lexer) -> Token {
             // U+00C0 and above keeps the permissive treatment.
             if is_latin1_non_identifier_char(c) {
               self.invalid_char_count += 1
+              self.note_diag("invalid character in source")
             }
             self.pos -= 1
             self.scan_ident()
@@ -2982,6 +3032,7 @@ pub fn Lexer::next_token(self : Lexer) -> Token {
               })
             if !is_escape_start {
               self.invalid_char_count += 1
+              self.note_diag("invalid character in source")
             }
             Ident(c.to_string())
           }

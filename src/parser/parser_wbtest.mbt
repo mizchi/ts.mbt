@@ -8824,3 +8824,88 @@ test "lexer: spaces after a comment are whitespace" {
   let line = Lexer::new("let h = 5 // c\n\u{A0}h").tokenize()
   assert_eq(line[4].kind, Ident("h"))
 }
+
+///|
+/// The lexer reads JSX text and attribute values as JavaScript, so a
+/// Tailwind class such as `univer-tracking-[0.08em]` in a multi-line
+/// `className`, or `08` and a backtick in JSX text, raised numeric and
+/// template diagnostics tsc does not give (probed). In JSX mode those wait
+/// for the parse and are reported only outside every JSX element, while a
+/// `{ … }` payload is JavaScript and still reports from its sub-parser,
+/// whether its parse succeeds or not.
+test "parser: lexer diagnostics inside JSX text are artifacts (jsxlexerdiags)" {
+  let misuses = fn(src : String) -> Array[String] raise {
+    let module_ = Parser::from_source_with_jsx(src, true).parse_module()
+    module_.grammar_misuses.filter(fn(m) { is_lexer_diag_message(m) })
+  }
+  let multi =
+    #|export const a = <div
+    #|  className="
+    #|    univer-tracking-[0.08em] univer-p-08
+    #|  "
+    #|/>;
+  assert_eq(misuses(multi), [])
+  assert_eq(
+    misuses("export const a = <p>width 0.08em, 08 px, 017, 0x</p>;\n"),
+    [],
+  )
+  assert_eq(misuses("export const a = <p>cost `x</p>;\n"), [])
+  assert_eq(misuses("export const a = <p>a ¬ b</p>;\n"), [])
+  // A payload is JavaScript.
+  assert_eq(misuses("export const a = <p>{0x}</p>;\n"), [
+    "hexadecimal digit expected",
+  ])
+  assert_eq(misuses("export const a = <p a={0o9} />;\n"), [
+    "invalid digit in a binary or octal numeric literal", "hexadecimal digit expected",
+  ])
+  assert_eq(misuses("export const a = <p>{[0o9]}</p>;\n"), [
+    "invalid digit in a binary or octal numeric literal", "hexadecimal digit expected",
+  ])
+  assert_eq(
+    misuses(
+      "declare const ok: boolean;\nexport const a = <p>{ok && <b>{0x}</b>}</p>;\n",
+    ),
+    ["hexadecimal digit expected"],
+  )
+  assert_eq(
+    misuses(
+      "declare const ok: boolean;\nexport const a = <p>{ok && <b>w 0.08em</b>}</p>;\n",
+    ),
+    [],
+  )
+  // Outside every element, in a `.tsx` file, it is still reported.
+  assert_eq(misuses("export const a = <p>t</p>;\nexport const n = 08;\n"), [
+    "decimals with leading zeros are not allowed",
+  ])
+  assert_eq(misuses("export const s = `x;\n"), ["unterminated template literal"])
+  // Reported once per file however often it occurs, as in a `.ts` file.
+  assert_eq(
+    misuses(
+      "export const a = <p>t</p>;\nexport const r = /x\nexport const q = /y\n",
+    ),
+    ["unterminated regular expression literal"],
+  )
+  // A `declare module "m"` body is re-parsed by a child whose grammar list
+  // nothing surfaces: the outer parser forgave its own copies for the
+  // child, so the child's report comes back.
+  assert_eq(
+    misuses(
+      "declare module \"m\" {\n  const x = 0x;\n}\nexport const y = <p>t</p>;\n",
+    ),
+    ["hexadecimal digit expected"],
+  )
+}
+
+///|
+/// A line comment in a JSX `{…}` payload ends at LS and PS as the lexer
+/// reads them, not only at LF and CR: the source scanner that finds the
+/// payload's closing brace otherwise ran past it (probed: tsc checks the
+/// call after `// note` + LS).
+test "parser: a JSX payload line comment ends at LS and PS (jsxcommentls)" {
+  let ls = Parser::from_source_with_jsx("x // a\u{2028}b", true)
+  assert_eq(ls.skip_source_line_comment(2), 7)
+  let ps = Parser::from_source_with_jsx("x // a\u{2029}b", true)
+  assert_eq(ps.skip_source_line_comment(2), 7)
+  let lf = Parser::from_source_with_jsx("x // a\nb", true)
+  assert_eq(lf.skip_source_line_comment(2), 7)
+}

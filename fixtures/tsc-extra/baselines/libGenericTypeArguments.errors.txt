@@ -1,0 +1,71 @@
+libGenericTypeArguments.ts(16,14): error TS2322: Type 'Set<string>' is not assignable to type 'Set<number>'.
+  Type 'string' is not assignable to type 'number'.
+libGenericTypeArguments.ts(17,14): error TS2322: Type 'Set<string>' is not assignable to type 'ReadonlySet<number>'.
+  Types of property 'forEach' are incompatible.
+    Type '(callbackfn: (value: string, value2: string, set: Set<string>) => void, thisArg?: any) => void' is not assignable to type '(callbackfn: (value: number, value2: number, set: ReadonlySet<number>) => void, thisArg?: any) => void'.
+      Types of parameters 'callbackfn' and 'callbackfn' are incompatible.
+        Types of parameters 'value' and 'value' are incompatible.
+          Type 'string' is not assignable to type 'number'.
+libGenericTypeArguments.ts(18,14): error TS2322: Type 'Map<string, number>' is not assignable to type 'Map<string, string>'.
+  Type 'number' is not assignable to type 'string'.
+libGenericTypeArguments.ts(19,14): error TS2322: Type 'Map<string, number>' is not assignable to type 'ReadonlyMap<string, string>'.
+  Types of property 'forEach' are incompatible.
+    Type '(callbackfn: (value: number, key: string, map: Map<string, number>) => void, thisArg?: any) => void' is not assignable to type '(callbackfn: (value: string, key: string, map: ReadonlyMap<string, string>) => void, thisArg?: any) => void'.
+      Types of parameters 'callbackfn' and 'callbackfn' are incompatible.
+        Types of parameters 'value' and 'value' are incompatible.
+          Type 'number' is not assignable to type 'string'.
+libGenericTypeArguments.ts(20,14): error TS2322: Type 'string[]' is not assignable to type 'number[]'.
+  Type 'string' is not assignable to type 'number'.
+libGenericTypeArguments.ts(21,14): error TS2322: Type 'Promise<string>' is not assignable to type 'Promise<number>'.
+  Type 'string' is not assignable to type 'number'.
+
+
+==== libGenericTypeArguments.ts (6 errors) ====
+    // A lib generic written with its type arguments is compared by them: a
+    // `Set<string>` is not a `Set<number>`, nor a `ReadonlySet<number>`, and an
+    // `Array<string>` is not a `number[]`. The matching arguments are legal, and
+    // a mutable collection is its readonly view.
+    
+    declare const s: Set<string>;
+    declare const m: Map<string, number>;
+    declare const a: Array<string>;
+    declare const p: Promise<string>;
+    
+    export const okSet: ReadonlySet<string> = s;
+    export const okMap: ReadonlyMap<string, number> = m;
+    export const okArray: string[] = a;
+    export const okPromise: Promise<string> = p;
+    
+    export const badSet: Set<number> = s;
+                 ~~~~~~
+!!! error TS2322: Type 'Set<string>' is not assignable to type 'Set<number>'.
+!!! error TS2322:   Type 'string' is not assignable to type 'number'.
+    export const badReadonlySet: ReadonlySet<number> = s;
+                 ~~~~~~~~~~~~~~
+!!! error TS2322: Type 'Set<string>' is not assignable to type 'ReadonlySet<number>'.
+!!! error TS2322:   Types of property 'forEach' are incompatible.
+!!! error TS2322:     Type '(callbackfn: (value: string, value2: string, set: Set<string>) => void, thisArg?: any) => void' is not assignable to type '(callbackfn: (value: number, value2: number, set: ReadonlySet<number>) => void, thisArg?: any) => void'.
+!!! error TS2322:       Types of parameters 'callbackfn' and 'callbackfn' are incompatible.
+!!! error TS2322:         Types of parameters 'value' and 'value' are incompatible.
+!!! error TS2322:           Type 'string' is not assignable to type 'number'.
+    export const badMap: Map<string, string> = m;
+                 ~~~~~~
+!!! error TS2322: Type 'Map<string, number>' is not assignable to type 'Map<string, string>'.
+!!! error TS2322:   Type 'number' is not assignable to type 'string'.
+    export const badReadonlyMap: ReadonlyMap<string, string> = m;
+                 ~~~~~~~~~~~~~~
+!!! error TS2322: Type 'Map<string, number>' is not assignable to type 'ReadonlyMap<string, string>'.
+!!! error TS2322:   Types of property 'forEach' are incompatible.
+!!! error TS2322:     Type '(callbackfn: (value: number, key: string, map: Map<string, number>) => void, thisArg?: any) => void' is not assignable to type '(callbackfn: (value: string, key: string, map: ReadonlyMap<string, string>) => void, thisArg?: any) => void'.
+!!! error TS2322:       Types of parameters 'callbackfn' and 'callbackfn' are incompatible.
+!!! error TS2322:         Types of parameters 'value' and 'value' are incompatible.
+!!! error TS2322:           Type 'number' is not assignable to type 'string'.
+    export const badArray: number[] = a;
+                 ~~~~~~~~
+!!! error TS2322: Type 'string[]' is not assignable to type 'number[]'.
+!!! error TS2322:   Type 'string' is not assignable to type 'number'.
+    export const badPromise: Promise<number> = p;
+                 ~~~~~~~~~~
+!!! error TS2322: Type 'Promise<string>' is not assignable to type 'Promise<number>'.
+!!! error TS2322:   Type 'string' is not assignable to type 'number'.
+    
