@@ -8428,6 +8428,28 @@ product surfaces now.
     `"01"` met it. It now uses tsc's `isNumericLiteralName`, the round trip
     `(+name).toString() === name`, through `is_round_trip_number_string`
     plus `NaN` / `Infinity` / `-Infinity`.
+  - **#332's review: one of two Majors and one of two Minors were real.**
+    - The `Array.isArray` change regressed every plain alias. Expanding a
+      bare `Named(V)` whose members are not aliases hands `V` back
+      unchanged, so `type V = string | number[]` reached the split as one
+      member and stopped narrowing in both branches. The outer alias is
+      unwrapped first now.
+    - `cast_shape_fields` kept the requiredness of the FIRST constituent of
+      an intersection that declares a name, so `{ a?: number } & { a:
+      number }` read `a` as optional and `Partial` of it was taken as a
+      no-op, while the reversed order reported. A member is required when
+      any constituent requires it.
+    - Not reproduced: an alias-declaring module's own functions reading the
+      other module's class through the bare name. An imported value's type
+      is read through its declaring module's renames, so `area(r: Rect)` in
+      the alias module keeps the alias, through a barrel too. Probing it
+      found a different false positive that main has as well: a module that
+      declares `type Rect` and imports the class as `import { Rect as R2 }`
+      reads `R2` as its own alias.
+    - Not taken: a required member typed `T | undefined` is still read as
+      optional. `TsInterface.fields` holds `(name, type)` and the parser
+      stores `x?: T` as `T | undefined`, so telling the two apart needs an
+      AST field the bridge also reads. It stays a declared MISS.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

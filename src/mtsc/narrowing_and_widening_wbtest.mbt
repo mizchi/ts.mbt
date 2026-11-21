@@ -4422,8 +4422,18 @@ test "Array.isArray splits a union whose member is an alias to a union (isarraya
     #|  if (!Array.isArray(area)) { const xs: V[] = area; return xs; }
     #|  return null;
     #|}
+    #|type W = string | number[];
+    #|export function okPlainAlias(w: W) {
+    #|  if (Array.isArray(w)) { const n: number[] = w; return n; }
+    #|  const s: string = w; return s;
+    #|}
+    #|export function badPlainAlias(w: W) {
+    #|  if (Array.isArray(w)) { const s: string = w; return s; }
+    #|  return null;
+    #|}
   assert_eq(issue_lines(src), [
     "function badElseIsNotArray > binding `xs` init: expected `V[]` but got `Base | Err`",
+    "function badPlainAlias > binding `s` init: expected `string` but got `number[]`",
   ])
 }
 
@@ -4442,9 +4452,17 @@ test "Partial of an all-optional type is that type (partialalloptional)" {
     #|export const okInherited: E = pe;
     #|export const badRequired: R = pr;
     #|export function badGeneric<T>(p: Partial<T>) { const t: T = p; return t; }
+    #|type T1 = { a?: number } & { a: number };
+    #|type T2 = { a: number } & { a?: number };
+    #|declare const p1: Partial<T1>;
+    #|declare const p2: Partial<T2>;
+    #|export const badIntersectionLate: T1 = p1;
+    #|export const badIntersectionEarly: T2 = p2;
   assert_eq(issue_lines(src), [
     "function badGeneric > binding `t` init: type `Partial<T>` is not assignable to type `T`",
     "top-level > binding `badRequired` init: type `Partial<R>` is not assignable to type `R`",
+    "top-level > binding `badIntersectionLate` init: type `Partial<T1>` is not assignable to type `T1`",
+    "top-level > binding `badIntersectionEarly` init: type `Partial<T2>` is not assignable to type `T2`",
   ])
 }
 

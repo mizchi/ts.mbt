@@ -2022,8 +2022,12 @@ fn array_is_array_split(
   // univer's `addArea(area: MultiAreaValue | MultiAreaValue[])`, with
   // `MultiAreaValue = BaseReferenceObject | ErrorValueObject`, kept the
   // alias as one member the loop below cannot classify, and the split
-  // abstained.
-  let parts = union_components(expand_union_alias_members(resolver, cur))
+  // abstained. The outer alias is unwrapped first: expanding a bare
+  // `Named(V)` whose members are not themselves aliases hands `V` back
+  // unchanged (#332's review).
+  let parts = union_components(
+    expand_union_alias_members(resolver, resolver.unwrap(cur)),
+  )
   if parts.length() < 2 {
     return None
   }
@@ -63857,9 +63861,10 @@ fn cast_shape_fields(
         match cast_shape_fields(resolver, p, depth + 1) {
           Some(pf) =>
             for k, v in pf {
-              if !out.contains(k) {
-                out[k] = v
-              }
+              // A member of an intersection is required when ANY
+              // constituent requires it: `{ a?: number } & { a: number }`
+              // requires `a`, whichever order the two are written in.
+              out[k] = v || out.get(k).unwrap_or(false)
             }
           None => return None
         }
