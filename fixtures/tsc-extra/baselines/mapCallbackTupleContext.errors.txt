@@ -12,9 +12,17 @@ mapCallbackTupleContext.ts(21,14): error TS2322: Type '[number, string][]' is no
 mapCallbackTupleContext.ts(22,14): error TS2322: Type '([number, number] | undefined)[]' is not assignable to type '[number, number][]'.
   Type '[number, number] | undefined' is not assignable to type '[number, number]'.
     Type 'undefined' is not assignable to type '[number, number]'.
+mapCallbackTupleContext.ts(28,14): error TS2322: Type '[number, string][]' is not assignable to type '[number, number][]'.
+  Type '[number, string]' is not assignable to type '[number, number]'.
+    Type at position 1 in source is not compatible with type at position 1 in target.
+      Type 'string' is not assignable to type 'number'.
+mapCallbackTupleContext.ts(31,14): error TS2322: Type '[number, string][]' is not assignable to type '[number, "x"][]'.
+  Type '[number, string]' is not assignable to type '[number, "x"]'.
+    Type at position 1 in source is not compatible with type at position 1 in target.
+      Type 'string' is not assignable to type '"x"'.
 
 
-==== mapCallbackTupleContext.ts (4 errors) ====
+==== mapCallbackTupleContext.ts (6 errors) ====
     // `xs.map(cb)` assigned to an array of tuples: the callback's return is
     // typed by the tuple element, so a returned array literal is a tuple, in an
     // expression body, a block body, or both branches of a conditional. A
@@ -55,4 +63,23 @@ mapCallbackTupleContext.ts(22,14): error TS2322: Type '([number, number] | undef
 !!! error TS2322: Type '([number, number] | undefined)[]' is not assignable to type '[number, number][]'.
 !!! error TS2322:   Type '[number, number] | undefined' is not assignable to type '[number, number]'.
 !!! error TS2322:     Type 'undefined' is not assignable to type '[number, number]'.
+    
+    // A declarator group (`const a = n, b = n`) is local `const`s like any
+    // other: each declarator is typed before the tuple is. A `let` is typed the
+    // same way, with its initializer widened, so `let s = "x"` is a `string`.
+    export const okGroup: [number, number][] = ns.map((n) => { const a = n, b = n + 1; return [a, b]; });
+    export const badGroup: [number, number][] = ns.map((n) => { const a = n, b = "x"; return [a, b]; });
+                 ~~~~~~~~
+!!! error TS2322: Type '[number, string][]' is not assignable to type '[number, number][]'.
+!!! error TS2322:   Type '[number, string]' is not assignable to type '[number, number]'.
+!!! error TS2322:     Type at position 1 in source is not compatible with type at position 1 in target.
+!!! error TS2322:       Type 'string' is not assignable to type 'number'.
+    export const okLet: [number, number][] = ns.map((n) => { let a = n; return [a, a]; });
+    export const okLetGroup: [number, number][] = ns.map((n) => { let a = n, b = n; return [a, b]; });
+    export const badLetWidened: [number, "x"][] = ns.map((n) => { let s = "x"; return [n, s]; });
+                 ~~~~~~~~~~~~~
+!!! error TS2322: Type '[number, string][]' is not assignable to type '[number, "x"][]'.
+!!! error TS2322:   Type '[number, string]' is not assignable to type '[number, "x"]'.
+!!! error TS2322:     Type at position 1 in source is not compatible with type at position 1 in target.
+!!! error TS2322:       Type 'string' is not assignable to type '"x"'.
     

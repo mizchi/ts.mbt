@@ -5934,6 +5934,31 @@ fn inferred_primitive_field_type(
             Some(e) => return Some(@ast.TsType::Named(e))
             None => ()
           }
+          // A lib keyed collection with written type arguments (`private
+          // _m = new Map<string, S | null>()`) is that instance, as tsc
+          // gives it: univer's `_scrollCacheStates` read as `any`, so
+          // `this._scrollCacheStates.get(key)` was too and the `canvas ===
+          // previous.canvas` guard on it had nothing to narrow by. Only a
+          // FIELD's initializer: typed everywhere (`const m = new Map<…>()`),
+          // it exposed relations this checker does not have yet, a `switch`
+          // over an alias built from `Extract` and `Partial` (excalidraw's
+          // `transform.ts`) and a rest-tuple callback parameter (univer's
+          // `fromCallback<[number]>`), so a top-level one stays `any`.
+          match cls.instance_field_inits[i].1 {
+            TypeArgs(targs, New("Map" | "WeakMap" as n, _)) if targs.length() ==
+              2 &&
+              resolver.classes.get(n) is None &&
+              resolver.interfaces.get(n) is None &&
+              targs.iter().all(is_checkable) =>
+              return Some(@ast.TsType::Applied(n, targs))
+            TypeArgs(targs, New("Set" | "WeakSet" as n, _)) if targs.length() ==
+              1 &&
+              resolver.classes.get(n) is None &&
+              resolver.interfaces.get(n) is None &&
+              targs.iter().all(is_checkable) =>
+              return Some(@ast.TsType::Applied(n, targs))
+            _ => ()
+          }
           let t = widen_literal(
             resolver.unwrap(
               infer_expr(env, resolver, cls.instance_field_inits[i].1),
@@ -20025,8 +20050,19 @@ fn contextual_map_tuple_result(
     ArrowBlock(b) => {
       let n = b.stmts.length()
       guard n > 0 && b.stmts[n - 1] is Return(Some(last)) else { return None }
+      // `const a = n, b = n` is one `DECL_GROUP_POSITION` block holding a
+      // declaration per declarator, and is read through. A real nested
+      // block is not a group and still abstains.
+      let prefix : Array[@ast.TsStmt] = []
       for i in 0..<(n - 1) {
         match b.stmts[i] {
+          Block({ stmts, stmt_positions, }) if stmt_positions ==
+            [@ast.DECL_GROUP_POSITION] => prefix.append(stmts)
+          st => prefix.push(st)
+        }
+      }
+      for st in prefix {
+        match st {
           Const(Ident(name), declared, init) =>
             inner.bind(
               name,
@@ -20034,6 +20070,29 @@ fn contextual_map_tuple_result(
                 declared
               } else {
                 infer_expr(inner, resolver, init)
+              },
+            )
+          // A `let` / `var` is its declared type, or its initializer's
+          // widened as the declaration checker widens it (`let a = n` is
+          // `number`, `let s = "x"` is `string`). One the block assigns
+          // again, or one with no initializer, abstains: the assignment
+          // can narrow it, and this reader does not follow narrowing.
+          Let(Ident(name), declared, init) | Var(Ident(name), declared, init) if !(init
+            is Var("__ts_no_init__")) &&
+            !block_assigns_name(b, name) =>
+            inner.bind(
+              name,
+              if is_checkable(declared) {
+                declared
+              } else {
+                binding_init_type(
+                  true,
+                  is_fresh_literal_expr(init),
+                  infer_expr(inner, resolver, init),
+                  init,
+                  resolver,
+                  fn(e) { infer_expr(inner, resolver, e) },
+                )
               },
             )
           Expr(_) => ()
@@ -23204,10 +23263,17 @@ fn assignable_through_class_chain(
           return false
         }
       }
+      // The return is covariant, and an object shape against an interface
+      // is a STRUCTURAL question the resolver-free relation cannot ask:
+      // `() => { a: number }` for `() => A` with `interface A { a: number }`
+      // was reported, and so was effect's `makeHooks(() => ({ occurrences
+      // }), …)` against `Hooks<string, FrequencyState>` once `new
+      // Map<K, V>()` was typed.
       tr is (Void | Any) ||
       sr is Any ||
       is_assignable_to(sr, tr) ||
-      chain_relates_names(sr, tr, resolver)
+      chain_relates_names(sr, tr, resolver) ||
+      struct_field_assignable(sr, tr, resolver, [])
     }
     // Same-shape primitive / `null` / `undefined` matches so a union
     // walk like `Foo | null → Object | null` succeeds (the class chain
@@ -29548,6 +29614,16 @@ fn infer_block_return(
   flatten(top)
   for stmt in flat {
     match stmt {
+      // A `let` / `var` the block assigns again is not read by its
+      // initializer: in get-or-create (`let s = m.get(k); if (s ===
+      // undefined) { s = new Map() } return s`) the initializer's
+      // `undefined` is gone by the `return`, which this reader cannot see,
+      // so the name stays unbound and the return abstains (effect's
+      // `layerBackingMemory`, once `new Map<K, V>()` was typed).
+      Var(@ast.TsBinding::Ident(name), _, _)
+      | Let(@ast.TsBinding::Ident(name), _, _) if block_assigns_name(
+          block, name,
+        ) => ()
       Var(@ast.TsBinding::Ident(name), declared, init)
       | Let(@ast.TsBinding::Ident(name), declared, init)
       | Const(@ast.TsBinding::Ident(name), declared, init) =>
@@ -30106,6 +30182,7 @@ fn check_arrow_with_context(
     ArrowBlock(block) => {
       // Recheck the block with the new env and the formal_ret as the
       // expected return type.
+      hoist_function_declarations(env, inner_ctx.resolver, block.stmts)
       for stmt in block.stmts {
         check_stmt(env, stmt, inner_ctx)
       }
@@ -30382,6 +30459,7 @@ fn check_funcexpr_with_context(
     )
   }
   let pre_len = ctx.issues.length()
+  hoist_function_declarations(env, inner_ctx.resolver, f.body.stmts)
   for stmt in f.body.stmts {
     check_stmt(env, stmt, inner_ctx)
   }
@@ -32648,6 +32726,11 @@ fn bind_array_pattern(
             }
           Array(t) => t
           Applied("Array", [t]) | Applied("ReadonlyArray", [t]) => t
+          // A string iterates its characters, so `const [, r, g] = hex`
+          // binds strings (univer's `_colorWithOpacity`, probed). Read as
+          // `undefined`, `r + g` was a number.
+          String_ | Literal(_) | TemplateLiteralType(_, _) =>
+            @ast.TsType::String_
           // A union whose every member destructures as a tuple or an array
           // (`Q extends GlobalPoint | LocalPoint`, each a branded tuple)
           // binds the union of the members' elements at this index. Any
@@ -32717,6 +32800,8 @@ fn bind_array_pattern(
           @ast.TsType::Tuple(remaining)
         }
         Array(t) => @ast.TsType::Array(t)
+        String_ | Literal(_) | TemplateLiteralType(_, _) =>
+          @ast.TsType::Array(String_)
         _ => @ast.TsType::Any
       }
       check_object_pattern_over_array(ctx, rest_binding, rest_ty)
@@ -34356,31 +34441,66 @@ fn collect_narrowing(
                 // `unknown` is `object & Record<"then", unknown>`, which is
                 // the whole point of the spelling (effect's
                 // `"catch" in input && isFunction(input.catch)`). Only the
-                // record-ish shapes take it; a union whose members all lack
-                // the key is left alone.
-                Never =>
-                  match cur {
-                    NonPrimitiveObject | Unknown =>
-                      pair_pos.push((name, Object([(Literal(key), Unknown)])))
-                    Object(fields) => {
-                      let out = fields.copy()
-                      out.push((Literal(key), Unknown))
-                      pair_pos.push((name, Object(out)))
+                // record-ish shapes take it. A union whose members all lack
+                // the key is `(A | B) & Record<"key", unknown>`, as tsc
+                // writes it: univer's `'generated' in part &&
+                // part.generated` over `ParsedFormatSection |
+                // ErrorFormatSection`. One member that is not record-ish
+                // (a primitive, a nullish value, a type parameter), or whose
+                // members are not all known, leaves the whole union alone.
+                Never => {
+                  let record = fn(t : @ast.TsType) -> @ast.TsType? {
+                    match t {
+                      NonPrimitiveObject | Unknown =>
+                        Some(Object([(Literal(key), Unknown)]))
+                      Object(fields) => {
+                        let out = fields.copy()
+                        out.push((Literal(key), Unknown))
+                        Some(Object(out))
+                      }
+                      // An interface or class instance that lacks the key
+                      // is `T & Record<"key", unknown>` in tsc, so
+                      // `"members" in schema && schema.members` is legal on
+                      // a `schema: Constraint` (effect's `toTaggedUnion`).
+                      // The intersection keeps `T`'s own members.
+                      Named(_) | Applied(_, _) | Struct(_, _) =>
+                        Some(
+                          Intersection([t, Object([(Literal(key), Unknown)])]),
+                        )
+                      _ => None
                     }
-                    // An interface or class instance that lacks the key is
-                    // `T & Record<"key", unknown>` in tsc, so `"members" in
-                    // schema && schema.members` is legal on a `schema:
-                    // Constraint` (effect's `toTaggedUnion`). The
-                    // intersection keeps `T`'s own members.
-                    Named(_) | Applied(_, _) | Struct(_, _) =>
+                  }
+                  match cur {
+                    // Every member must be one whose members are all
+                    // known (`enumerable_object_shape`), or "lacks the key"
+                    // is only "is not modelled": excalidraw's `"clipboardData"
+                    // in event` over `ClipboardEvent | DragEvent` names lib
+                    // DOM types with no member table, and the record made
+                    // `event.clipboardData` an `unknown`.
+                    Union(parts) if parts
+                      .iter()
+                      .all(fn(p) {
+                        !(p is Unknown) &&
+                        record(p) is Some(_) &&
+                        (
+                          p is Object(_) ||
+                          resolver.enumerable_object_shape(p, 0)
+                        )
+                      }) =>
                       pair_pos.push(
                         (
                           name,
                           Intersection([cur, Object([(Literal(key), Unknown)])]),
                         ),
                       )
-                    _ => ()
+                    Union(_) => ()
+                    _ =>
+                      match record(cur) {
+                        Some(r) => pair_pos.push((name, r))
+                        None => ()
+                      }
                   }
+                }
                 _ => pair_pos.push((name, then_ty))
               }
               // The false side removes only a member that DECLARES the
@@ -36701,6 +36821,57 @@ fn analyze_equality(
     }
     None => ()
   }
+  // `x === y` with a `y` that cannot be nullish (`canvas ===
+  // previous.canvas`, where the field is a plain `Canvas`): on the equal
+  // side `x` is not nullish either, as tsc's comparability filter gives.
+  // univer's `_getReusableScrollCacheState` guards `canvas.getPixelRatio()`
+  // that way. Loose `==` agrees, since `null` and `undefined` equal only
+  // each other. The not-equal side learns nothing, and a literal on either
+  // side is left to the arms above, which narrow more precisely.
+  let literal_like = fn(e : @ast.TsExpr) -> Bool {
+    match e {
+      NumberLit(_)
+      | IntLit(_)
+      | BigIntLit(_)
+      | BoolLit(_)
+      | StringLit(_)
+      | NullLit
+      | TemplateLiteral(_, _)
+      | Var("undefined")
+      | UnaryOp(Void | Typeof, _) => true
+      _ => false
+    }
+  }
+  if !literal_like(left) && !literal_like(right) {
+    for pair in [(left, right), (right, left)] {
+      let (subject, other) = pair
+      match narrowing_key_for_expr(subject) {
+        Some(key) if type_definitely_non_nullish(
+            resolver,
+            infer_expr(env, resolver, other),
+          ) => {
+          let cur0 = narrowing_current_type(env, resolver, key)
+          let flat = flatten_union_parts(
+            expand_union_alias_members(
+              resolver,
+              match resolver.unwrap(cur0) {
+                Union(_) as u => u
+                _ => cur0
+              },
+            ),
+          )
+          let nullish = fn(v : @ast.TsType) { v is (Null | Undefined | Void) }
+          if union_components(flat).iter().any(nullish) {
+            match narrow_remove(flat, nullish) {
+              Never => ()
+              kept => true_side.push((key, kept))
+            }
+          }
+        }
+        _ => ()
+      }
+    }
+  }
 }
 
 ///|
@@ -36758,10 +36929,39 @@ fn string_equal_to_literal(
 ///|
 fn check_block(env : ExprEnv, block : @ast.TsBlock, ctx : CheckCtx) -> Unit {
   let pre = env.full_snapshot()
+  hoist_function_declarations(env, ctx.resolver, block.stmts)
   for stmt in block.stmts {
     check_stmt(env, stmt, ctx)
   }
   env.restore_from(pre)
+}
+
+///|
+/// Bind each function DECLARATION in `stmts` before any statement runs, as
+/// JavaScript hoists them: the parser writes `function g() {}` as `let g =
+/// function g() {}` in place, so a call made earlier, or from a function
+/// declared earlier, read `g` as unbound and its result as `any`. That
+/// `any` then kept a property's declared `T | undefined` after `s.body =
+/// g(k)`, and `return s.body` was reported (effect's `revivePersisted`,
+/// whose nested `resolveReference` calls an `annotate` declared below it).
+/// A name the env already binds is left to the statement that binds it.
+fn hoist_function_declarations(
+  env : ExprEnv,
+  resolver : Resolver,
+  stmts : Array[@ast.TsStmt],
+) -> Unit {
+  for stmt in stmts {
+    match stmt {
+      Let(Ident(n), Any, FuncExpr(f) as e) if f.name == n &&
+        env.lookup(n) is None => {
+        let t = infer_expr(env, resolver, e)
+        if is_checkable(t) {
+          env.bind(n, t)
+        }
+      }
+      _ => ()
+    }
+  }
 }
 
 ///|
@@ -37372,6 +37572,7 @@ fn check_block_narrowing_exit(
   for b in binds {
     env.bind(b.0, b.1)
   }
+  hoist_function_declarations(env, ctx.resolver, block.stmts)
   for stmt in block.stmts {
     check_stmt(env, stmt, ctx)
   }
@@ -38801,20 +39002,41 @@ fn narrow_after_assignment(
     TypeArgs(_, inner) | PureCall(inner) => inner
     _ => value
   }
-  let never_nullish = match shape {
-    New(_, _)
-    | NewExpr(_, _)
-    | ObjectLit(_)
-    | ArrayLit(_)
-    | ArrowFunc(_, _, _, _)
-    | FuncExpr(_)
-    | NativeClassExpr(_, _) => true
-    // A method call whose declaration says it cannot be nullish, read by
-    // `method_call_never_nullish` (a static factory, or an unannotated
-    // instance method whose body decides it).
-    MethodCall(_, _, _) => method_call_never_nullish(env, ctx, shape)
-    _ => false
+  fn syntactically_never_nullish(e : @ast.TsExpr) -> Bool {
+    let e = match e {
+      TypeArgs(_, inner) | PureCall(inner) => inner
+      _ => e
+    }
+    match e {
+      New(_, _)
+      | NewExpr(_, _)
+      | ObjectLit(_)
+      | ArrayLit(_)
+      | ArrowFunc(_, _, _, _)
+      | FuncExpr(_)
+      | NativeClassExpr(_, _) => true
+      // A method call whose declaration says it cannot be nullish, read by
+      // `method_call_never_nullish` (a static factory, or an unannotated
+      // instance method whose body decides it).
+      MethodCall(_, _, _) => method_call_never_nullish(env, ctx, e)
+      // `a ?? b` is `b` exactly when `a` is nullish, so it cannot be
+      // nullish when `b` cannot. `b` may also be a string, number or
+      // boolean literal, or an enum member: univer's `lang =
+      // LANG_MAP_TO_HYPHEN_LANG[francLang] ?? Lang.UNKNOWN` on a binding
+      // declared by `Map.get`, where the left read is `any` here, left
+      // `lang` carrying its `undefined` to the `return` (probed: tsc
+      // accepts it).
+      BinOp(Coalesce, _, r) =>
+        match r {
+          StringLit(_) | IntLit(_) | NumberLit(_) | BoolLit(_) => true
+          _ =>
+            syntactically_never_nullish(r) ||
+            enum_member_receiver(env, ctx.resolver, r) is Some(_)
+        }
+      _ => false
+    }
   }
+  let never_nullish = syntactically_never_nullish(shape)
   // A declaration with a SINGLE non-nullish member narrows to exactly that
   // member when a never-nullish value is assigned: tsc narrows the
   // DECLARED type by assignability, and with one candidate the answer is
@@ -45365,6 +45587,7 @@ fn check_function_body_with(
   for entry in collect_literal_reassignments(func.body.stmts) {
     env.bind("<unstable-assign>" + entry.0, entry.1)
   }
+  hoist_function_declarations(env, ctx.resolver, func.body.stmts)
   for stmt in func.body.stmts {
     check_stmt(env, stmt, ctx)
   }

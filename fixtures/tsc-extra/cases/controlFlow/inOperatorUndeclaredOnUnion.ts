@@ -1,0 +1,44 @@
+// @strict: true
+
+// `"k" in x` when no member of `x`'s union declares `k` narrows `x` to
+// `x & Record<"k", unknown>` (TS 4.9), so `x.k` reads as `unknown`. A
+// member the check cannot rule out keeps the key: a lib DOM type, which
+// declares it, wins the usual filter instead.
+
+interface A { a: number }
+interface B { b: string }
+type AB = A | B;
+
+export function okInUndeclared(p: AB | undefined): boolean {
+  return !!p && "generated" in p && Boolean(p.generated);
+}
+export function okInUndeclaredSingle(p: A) {
+  if ("extra" in p) { return p.extra; }
+  return undefined;
+}
+export function okUnionElse(p: A | B) {
+  if (!("k" in p)) { return 0; }
+  return p.k;
+}
+export function okUnionKeepsOwn(p: A | B) {
+  if ("k" in p && "a" in p) { return p.a; }
+  return 0;
+}
+export function okLibUnion(event: ClipboardEvent | DragEvent) {
+  if ("clipboardData" in event && event.clipboardData) {
+    return event.clipboardData.getData("text");
+  }
+  return "";
+}
+export function badInUndeclaredElse(p: A) {
+  if ("extra" in p) { return 0; }
+  return p.extra;
+}
+export function badUnionUnknown(p: A | B): number {
+  if ("k" in p) { const n: number = p.k; return n; }
+  return 0;
+}
+export function badUnionOtherMember(p: A | B) {
+  if ("k" in p) { return p.a; }
+  return 0;
+}

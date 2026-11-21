@@ -7977,6 +7977,68 @@ product surfaces now.
     `any`: both turned a real TS2322 into silence. A block is read only as
     `const`s and expression statements followed by one `return`, with the
     `const`s bound first, and any other shape is left to the plain check.
+  Batch HP is univer's next categories and #325's one Minor. univer core
+  goes 19 -> 17, docs-hyper-link 7 -> 5, data-validation 50 -> 40,
+  sheets-numfmt 49 -> 39 and ui 38 -> 25, effect 60 -> 58, with no
+  report at a new site and the oracle unchanged. Most items are relations
+  and narrowings that some sites already had and others lacked:
+  - **Narrowing.** `x === y` with a `y` that cannot be nullish narrows `x`
+    on the equal side, as tsc's comparability filter does (univer's
+    `canvas === previous.canvas` guarding `getPixelRatio()`). An `in` test
+    whose key no member of a union declares gives `(A | B) & Record<"key",
+    unknown>`, but only over members whose members are all known
+    (`enumerable_object_shape`). Over lib DOM types, which have no member
+    table, "lacks the key" only means "is not modelled", and excalidraw's
+    `"clipboardData" in event` read `event.clipboardData` as `unknown`.
+  - **Bindings.** A string destructures as its characters, and the
+    destructured value used to be bound `undefined`, so `r + g` was a
+    number. Function declarations in a body are hoisted, because the parser
+    writes them as `let g = function g() {}` in place. A `let` the block
+    assigns again is not read by its initializer in a callback's return.
+  - **Relations.** A function type's return is compared structurally, the
+    same as a method's. `Map<K, V>` is assignable to `ReadonlyMap<K, V>`. A
+    constructor's parameters are related as a function's are. A target that
+    ends in a plain-array rest parameter accepts any source arity, so
+    `new () => U` is a `new (...args: any[]) => U` (univer's `UnitCtor`).
+  - **Typing `new Map<K, V>()` was restricted, and probing says why.**
+    Typed everywhere it made effect +7, excalidraw +10 and univer +3. The
+    effect reports came from four relations missing above: the
+    reassigned-`let` return, hoisting, the structural function return, and
+    `Map` to `ReadonlyMap`. Two exposures are left, both filed: a `switch`
+    over an alias built from `Extract` and `Partial` (excalidraw's
+    `transform.ts`), and a rest-tuple callback parameter (univer's
+    `fromCallback<[number]>`). So only an unannotated class FIELD's
+    initializer is typed.
+  - **The field typing exposed one more gap, and the first fix was wrong.**
+    univer's `LanguageDetector` assigns `LANG_MAP_TO_HYPHEN_LANG[francLang]
+    ?? Lang.UNKNOWN` to a `Map.get` result and returns it. A
+    `Record<string, V>` read with a `string`-typed key is `any` here, while
+    `R.foo` and the `{ [k: string]: V }` spelling are `V`. The `any` left
+    the binding's declared `Lang | undefined` in place. Typing the read as
+    `V` fixed it at FP 0 on every real package, and the ORACLE rejected it:
+    `controlFlowComputedPropertyNames` guards `typeof obj[key] === "string"`
+    over a `Record<string, unknown>` and then calls a method. That is TS
+    4.7's element-access narrowing, where a key that is a parameter or a
+    `const` nobody reassigns makes `obj[key]` a reference. While the read
+    was `any`, nothing needed the narrowing. The read is filed with that
+    dependency, and the tsc-extra case `recordStringIndexRead` shows both
+    halves.
+  - What shipped instead is narrower: `a ?? b` cannot be nullish when `b`
+    cannot, so assigning it narrows a `V | undefined` binding to `V`. `b`
+    can be a literal, an enum member, or another never-nullish shape. The
+    literal and object arms matter only when the left side is an `any` that
+    comes from a gap of ours. A left side that really is `any` costs a MISS:
+    tsc types `any ?? b` as `any`, which leaves the declared type, and the
+    two cannot be told apart here.
+  - **#325's review.** A declarator group (`const a = n, b = n`) is a
+    `DECL_GROUP_POSITION` block, so the tuple-returning `.map`'s block check
+    never reached its `Const`s and abstained, and a legal group read as
+    `number[][]`. It is flattened now. Probing the `let` neighbour found the
+    same false positive for a single `let a = n`, present on main. A `let`
+    or `var` is read now too, with its initializer widened through
+    `binding_init_type`, the helper the declaration checker uses. So
+    `let s = "x"` is a `string` and still fails a `"x"` slot, as in tsc.
+    One the block assigns again, or one with no initializer, abstains.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

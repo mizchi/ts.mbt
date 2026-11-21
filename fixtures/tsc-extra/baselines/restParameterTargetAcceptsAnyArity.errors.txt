@@ -1,0 +1,45 @@
+restParameterTargetAcceptsAnyArity.ts(20,14): error TS2322: Type 'new () => number' is not assignable to type 'UnitCtor'.
+  Type 'number' is not assignable to type 'U'.
+restParameterTargetAcceptsAnyArity.ts(21,14): error TS2322: Type '(a: number) => U' is not assignable to type '(x: string, ...rest: any[]) => U'.
+  Types of parameters 'a' and 'x' are incompatible.
+    Type 'string' is not assignable to type 'number'.
+restParameterTargetAcceptsAnyArity.ts(22,14): error TS2322: Type '(a: number, b: string) => U' is not assignable to type '(...args: number[]) => U'.
+  Types of parameters 'b' and 'args' are incompatible.
+    Type 'number' is not assignable to type 'string'.
+
+
+==== restParameterTargetAcceptsAnyArity.ts (3 errors) ====
+    // A target ending in a rest parameter accepts a source of any length, for
+    // a function type and a constructor type alike: each source parameter past
+    // the target's fixed ones takes the rest's element type.
+    
+    class U { u = 1 }
+    type UnitCtor = new (...args: any[]) => U;
+    declare function take(ctor: UnitCtor): void;
+    
+    declare const c0: new () => U;
+    export const okCtorNone: UnitCtor = c0;
+    export function okCtorArg() { take(c0); }
+    declare const c2: new (a: number, b: string) => U;
+    export const okCtorTwo: UnitCtor = c2;
+    declare const f2: (a: number, b: string) => U;
+    export const okFnRest: (...args: any[]) => U = f2;
+    declare const f1: (a: number) => U;
+    export const okRestElem: (...args: number[]) => U = f1;
+    
+    declare const cx: new () => number;
+    export const badCtorReturn: UnitCtor = cx;
+                 ~~~~~~~~~~~~~
+!!! error TS2322: Type 'new () => number' is not assignable to type 'UnitCtor'.
+!!! error TS2322:   Type 'number' is not assignable to type 'U'.
+    export const badRestFixed: (x: string, ...rest: any[]) => U = f1;
+                 ~~~~~~~~~~~~
+!!! error TS2322: Type '(a: number) => U' is not assignable to type '(x: string, ...rest: any[]) => U'.
+!!! error TS2322:   Types of parameters 'a' and 'x' are incompatible.
+!!! error TS2322:     Type 'string' is not assignable to type 'number'.
+    export const badRestElem: (...args: number[]) => U = f2;
+                 ~~~~~~~~~~~
+!!! error TS2322: Type '(a: number, b: string) => U' is not assignable to type '(...args: number[]) => U'.
+!!! error TS2322:   Types of parameters 'b' and 'args' are incompatible.
+!!! error TS2322:     Type 'number' is not assignable to type 'string'.
+    

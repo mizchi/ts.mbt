@@ -1,0 +1,42 @@
+stringArrayDestructuring.ts(23,9): error TS2322: Type 'string' is not assignable to type 'number'.
+stringArrayDestructuring.ts(28,9): error TS2322: Type 'string[]' is not assignable to type 'number[]'.
+  Type 'string' is not assignable to type 'number'.
+
+
+==== stringArrayDestructuring.ts (2 errors) ====
+    // A string destructures as its characters: each element is a `string`,
+    // and a rest element is a `string[]`.
+    
+    declare const hex: string;
+    
+    export function okStringDestructure() {
+      const [, r, g] = hex;
+      return Number.parseInt(r + g, 16);
+    }
+    export function okStringDestructureRest() {
+      const [first, ...rest] = hex;
+      const s: string = first;
+      const t: string[] = rest;
+      return s + t.join("");
+    }
+    export function okLiteralDestructure() {
+      const [c] = "ab";
+      const s: string = c;
+      return s;
+    }
+    export function badStringDestructure() {
+      const [a] = hex;
+      const n: number = a;
+            ~
+!!! error TS2322: Type 'string' is not assignable to type 'number'.
+      return n;
+    }
+    export function badStringRest() {
+      const [, ...rest] = hex;
+      const n: number[] = rest;
+            ~
+!!! error TS2322: Type 'string[]' is not assignable to type 'number[]'.
+!!! error TS2322:   Type 'string' is not assignable to type 'number'.
+      return n;
+    }
+    
