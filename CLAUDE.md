@@ -8380,6 +8380,139 @@ product surfaces now.
       `{ [k: string]: string; [k: number]: "ok" }` read as fitting, and so
       did a `string` signature of `string` values. Both were TPs on main,
       where the relation was not decided at all.
+  Batch HV is univer's next categories, one rxjs shape and #331's Minor.
+  univer core goes 6 -> 4, data-validation 11 -> 7, sheets-numfmt 10 -> 8
+  and ui 8 -> 6, excalidraw 42 -> 41 and effect 56 -> 55, with no report at
+  a new site and the oracle unchanged. Each cell was checked against the
+  TS7 nightly first.
+  - **`Array.isArray` opens an alias member.** `array_is_array_split`
+    classified each member of the unwrapped union, and a member that is
+    itself an alias to a union (univer's `MultiAreaValue | MultiAreaValue[]`,
+    with `MultiAreaValue = BaseReferenceObject | ErrorValueObject`) unwrapped
+    to a union the loop cannot classify, so the split abstained and
+    `this._areas.push(area)` was judged against the whole union. The union
+    is expanded through `expand_union_alias_members` first.
+  - **A class owns the bare name a dependency's alias shares.** A graph
+    check keys a name two reachable modules declare (`Name@<path>`), except
+    a CLASS, which cannot be keyed and keeps the bare name. The bare entry
+    still held the other module's ALIAS, and `unwrap` reads aliases before
+    classes, so univer's `Rect` class read as @floating-ui's `type Rect =
+    Prettify<…>`, and a `TransformerAnchor` argument was "expected `type &
+    {}`". A keyed alias now skips the bare registration when another
+    reachable module declares a class of its name. The interface arm was
+    written and removed: its mutation survived, because an interface of the
+    class's name already defers to the class.
+  - **`Partial<T>` into an all-optional `T`.** The Partial/Required lattice
+    rule reported `Partial<T>` into `T` whenever the cores matched, which is
+    wrong when every member of `T` is already optional (univer's
+    `Partial<IDataValidationRuleOptions>`). A shape `cast_shape_fields` can
+    enumerate with no required member is a no-op now; a type parameter
+    still reports. A required `x: T | undefined` reads as optional, since
+    the parser stores `x?: T` that way, and is a declared MISS.
+  - **A declaration narrows by its object literal.** tsc's
+    `getAssignmentReducedType` was applied to an ASSIGNMENT only, so `const
+    v: RecordValue = { type: RecordValueType.String, value: '…' }` kept the
+    whole union and `v.value` read as missing on the `Blank` member. The
+    declaration path calls the same helper now, which also reports a
+    property the picked member lacks (two new TPs in the probe).
+  - **An overloaded interface inside a union target.** A class implementing
+    an interface with overloaded methods passed against the bare interface
+    because overloaded shapes abstain, and was reported against `SchedulerLike
+    | undefined`, the type of every optional parameter (rxjs's
+    `throttleTime(16, animationFrameScheduler)`). Found by bisecting with a
+    tsc-acceptance guard: a reducer that does not keep tsc accepting the file
+    reduces to an unrelated error. A union member with overloads abstains the
+    same way, except for a primitive source.
+  - **#331's Minor.** The index-only relation took a property as numeric by
+    its digits, so `"-1"` and `"1.5"` missed the `number` signature and
+    `"01"` met it. It now uses tsc's `isNumericLiteralName`, the round trip
+    `(+name).toString() === name`, through `is_round_trip_number_string`
+    plus `NaN` / `Infinity` / `-Infinity`.
+  - **#332's review: one of two Majors and one of two Minors were real.**
+    - The `Array.isArray` change regressed every plain alias. Expanding a
+      bare `Named(V)` whose members are not aliases hands `V` back
+      unchanged, so `type V = string | number[]` reached the split as one
+      member and stopped narrowing in both branches. The outer alias is
+      unwrapped first now.
+    - `cast_shape_fields` kept the requiredness of the FIRST constituent of
+      an intersection that declares a name, so `{ a?: number } & { a:
+      number }` read `a` as optional and `Partial` of it was taken as a
+      no-op, while the reversed order reported. A member is required when
+      any constituent requires it.
+    - Not reproduced: an alias-declaring module's own functions reading the
+      other module's class through the bare name. An imported value's type
+      is read through its declaring module's renames, so `area(r: Rect)` in
+      the alias module keeps the alias, through a barrel too. Probing it
+      found a different false positive that main has as well: a module that
+      declares `type Rect` and imports the class as `import { Rect as R2 }`
+      reads `R2` as its own alias.
+    - Not taken: a required member typed `T | undefined` is still read as
+      optional. `TsInterface.fields` holds `(name, type)` and the parser
+      stores `x?: T` as `T | undefined`, so telling the two apart needs an
+      AST field the bridge also reads. It stays a declared MISS.
+  - **#332's second round: a stall on a 90-line file, in seven walks.** The
+    review named `Array.isArray`'s new expansion. Eight levels of ten
+    aliases, each naming the whole level below, are 10^8 paths, and the
+    walk re-expanded an alias on every path that reached it. Measured
+    rather than argued, it was one of seven walks with that shape, and the
+    smallest. gdb put every sample of the plain `!= null` file in
+    `reaches_alias`, the circular-alias check, which runs before any
+    narrowing and is as slow on main (1.8 s at depth 7, about 10x per
+    level). It remembered only the current PATH, which stops a cycle and
+    not a shared node. Each fix exposed the next: the member walk behind
+    `const n: string[] = v` (34 s at depth 8), then
+    `nominal_private_blocks` and `type_deeply_contains_unmodeled`, then,
+    for a union TARGET, `unwrap_containers` and the structural relation.
+    Each walk now enters an alias once:
+    - `reaches_alias` keeps every node it entered, and the alias bodies are
+      indexed once per module. A node's reachability does not depend on
+      the path, so every answer is unchanged.
+    - `deep_union_members` skips an alias already expanded at the same
+      depth or shallower, and expands one first reached deeper again,
+      where its depth bound had cut it short.
+    - `unwrap_containers` stops once anything aborts (the result is
+      discarded then), memoizes a completed expansion by alias name and
+      depth, and flattens and deduplicates a union's members. Whether an
+      expansion aborts depends on the name and the depth alone, since a
+      repeat found along one path is a cycle any other path meets too.
+    - The other four flatten a union whose members are alias unions first
+      (`flatten_union_alias_leaves`). "Fields common to every member",
+      "any member blocks" and "some member fits" mean the same over the
+      leaves.
+    The dedupe produced one regression, caught by the univer gate rather
+    than a test: two identical object branches (`isRow ? {…} : {…}`)
+    collapsed to a ONE-member `Union`, a shape no rule expects, and missed
+    the object arm of the structural relation. A union that deduplicates to
+    one member is that member now. Two arms were written and reverted,
+    because removing them changed no measured shape: the structural
+    relation's source side and `nominal_private_blocks`' target side.
+    The guards went from seconds to 10 ms and the assignments from 34 s to
+    under 10 ms, at depth 10 as at 8. Each mechanism is mutation-proven by
+    the time it brings back (2-71 s). `verify-checker-scaling` gains an
+    `alias-dag` axis, two aliases per level, which the old walks cannot
+    finish. `deep_union_members`'s own cost is bounded by its depth limit,
+    so it is pinned by a unit test on its member count instead: the old
+    walk returned 487 members for a union of 7. What is left is filed
+    rather than chased, because it is the same shape in more places and
+    slower on main: member access on such a union (20 s on main, 3.8 s
+    here), an optional chain (over 30 s on both), and truthiness, `typeof`
+    and discriminant narrowing through `non_nullable_resolved`. The fix
+    that ends the family is one flattened, memoized view of an alias union
+    in the resolver, so that no walk sees the DAG at all.
+  - **#332's third round: a union with no leaves.** Aliases that only name
+    each other (`type A = B | C; type B = A | C; type C = A | B`, TS2456)
+    flatten to nothing, since each alias opens once and none reaches a
+    leaf, and the field walk then read `parts[0]` of the empty result. The
+    review predicted an abort, and that is what the second round's binary
+    did. The probe found the state on main was no better: `keyof A`, an
+    assignment from `A` and one into `A` HUNG there, each recursing member
+    by member to a depth bound two ways at every level, and `{ ...a }`
+    overflowed the stack, as did `{ ...d }` over `type D = D & { x: number
+    }`. tsc reports the three TS2456s and reads the aliases as `any`, so a
+    union with no leaves now has no fields and takes any source, and
+    `spread_shape_is_known` reads a union's leaves and is depth-bounded for
+    the intersection. All five uses now report exactly tsc's TS2456s, and
+    each guard is mutation-proven by the test binary crashing without it.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

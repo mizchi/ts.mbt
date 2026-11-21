@@ -171,8 +171,16 @@ fn check_module_cycles(
   // 3. Circular type-alias chains: a type alias whose body recursively reaches
   //    itself only through other Named references (not through generic args
   //    or compound shapes that interrupt the cycle).
+  // The alias bodies, indexed once. The first declaration of a name wins,
+  // as the scan this replaces did.
+  let alias_bodies : Map[String, @ast.TsType] = Map([])
   for ta in module_.type_aliases {
-    if reaches_alias(module_, ta.name, ta.type_, []) {
+    if !alias_bodies.contains(ta.name) {
+      alias_bodies[ta.name] = ta.type_
+    }
+  }
+  for ta in module_.type_aliases {
+    if reaches_alias(module_, alias_bodies, ta.name, ta.type_, Map([])) {
       issues.push({
         kind: CircularTypeAlias,
         name: ta.name,
@@ -1134,15 +1142,25 @@ fn record_or_duplicate(
 }
 
 ///|
-// `reaches_alias(module_, target, body, visited)` returns true iff a Named
-// reference back to `target` exists in `body` reachable only through Named
-// references to other type aliases (not through Array/Object/Func/etc., which
-// constitute structural barriers that break the cycle).
+// `reaches_alias(module_, aliases, target, body, visited)` returns true iff a
+// Named reference back to `target` exists in `body` reachable only through
+// Named references to other type aliases (not through Array/Object/Func/etc.,
+// which constitute structural barriers that break the cycle).
+//
+// `visited` is the set of every node this walk has entered, and is never
+// popped. It used to be the current PATH, which stops a cycle and not a
+// shared node, so an alias reached along k paths was walked k times: ten
+// levels of ten aliases that each name the whole level below is 10^10
+// walks for one 100-line file (#332's review). One question is asked per
+// walk, whether `target` is reachable from the root, and a node's answer to
+// it does not depend on the path that reached it, so each node is entered
+// once.
 fn reaches_alias(
   module_ : @ast.TsModule,
+  aliases : Map[String, @ast.TsType],
   target : String,
   body : @ast.TsType,
-  visited : Array[String],
+  visited : Map[String, Unit],
 ) -> Bool {
   match body {
     Named(name) =>
@@ -1152,19 +1170,17 @@ fn reaches_alias(
         return false
       } else {
         // Only follow into the body if `name` is itself a top-level alias.
-        for ta in module_.type_aliases {
-          if ta.name == name {
-            visited.push(name)
-            let result = reaches_alias(module_, target, ta.type_, visited)
-            let _ = visited.pop()
-            return result
+        match aliases.get(name) {
+          Some(t) => {
+            visited[name] = ()
+            reaches_alias(module_, aliases, target, t, visited)
           }
+          None => false
         }
-        return false
       }
     Union(members) | Intersection(members) => {
       for m in members {
-        if reaches_alias(module_, target, m, visited) {
+        if reaches_alias(module_, aliases, target, m, visited) {
           return true
         }
       }
@@ -1202,10 +1218,8 @@ fn reaches_alias(
       }
       match vty {
         Some(t) => {
-          visited.push(key)
-          let result = reaches_alias(module_, target, t, visited)
-          let _ = visited.pop()
-          result
+          visited[key] = ()
+          reaches_alias(module_, aliases, target, t, visited)
         }
         None => false
       }
@@ -1221,17 +1235,17 @@ fn reaches_alias(
     // TS7-ACCEPTED, in this same corpus file) silent: their source is
     // `keyof T`, a type parameter.
     MappedType(_, source, _, _) =>
-      reaches_alias(module_, target, source, visited)
+      reaches_alias(module_, aliases, target, source, visited)
     // The `as` remap is evaluated per key alongside the source, so it is
     // in the same position.
     MappedTypeRemap(_, source, remap, _, _) =>
-      reaches_alias(module_, target, source, visited) ||
-      reaches_alias(module_, target, remap, visited)
+      reaches_alias(module_, aliases, target, source, visited) ||
+      reaches_alias(module_, aliases, target, remap, visited)
     // `keyof X` needs X's members, so it cannot break a cycle either.
     // Reachable only from a non-barrier position above, which is why
     // `type A = { x: keyof A }` stays silent (the Object is the barrier)
     // while `type A = keyof A` reports.
-    Keyof(inner) => reaches_alias(module_, target, inner, visited)
+    Keyof(inner) => reaches_alias(module_, aliases, target, inner, visited)
     _ => false
   }
 }

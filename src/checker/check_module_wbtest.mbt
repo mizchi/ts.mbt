@@ -681,3 +681,33 @@ test "check_module: the callable-bound sentinel respects scope, imports and stri
     1,
   )
 }
+
+///|
+/// The circular-alias walk enters each alias once: it used to remember only
+/// the current path, so an alias reached along k paths was walked k times
+/// (#332's review). A node's reachability does not depend on the path, so
+/// the answers are unchanged, including a cycle closed through a node an
+/// earlier branch already entered, and the shared node `D` below is one.
+/// The cost is gated by `verify-checker-scaling`'s `alias-dag` axis rather
+/// than here, since a regression there is a run that never ends.
+test "check_module: alias cycles through a shared alias (#332's review)" {
+  let cycles = fn(src : String) {
+    check_module(parse_module_or_empty(src)).issues
+    .filter(fn(i) { i.kind == CircularTypeAlias })
+    .map(fn(i) { i.name })
+  }
+  // A -> B -> D -> A and A -> C -> D: all four are on the cycle.
+  assert_eq(
+    cycles(
+      "type A = B | C; type B = D | string; type C = D | number; type D = A | null;",
+    ),
+    ["A", "B", "C", "D"],
+  )
+  // The same diamond with no edge back: nothing is circular.
+  assert_eq(
+    cycles(
+      "type A = B | C; type B = D | string; type C = D | number; type D = { a: A } | null;",
+    ),
+    [],
+  )
+}

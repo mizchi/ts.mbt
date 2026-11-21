@@ -1,0 +1,73 @@
+partialOfAllOptionalIsTheSameType.ts(20,14): error TS2322: Type 'Partial<R>' is not assignable to type 'R'.
+  Types of property 'a' are incompatible.
+    Type 'string | undefined' is not assignable to type 'string'.
+      Type 'undefined' is not assignable to type 'string'.
+partialOfAllOptionalIsTheSameType.ts(21,14): error TS2322: Type 'Partial<U>' is not assignable to type 'U'.
+  Property 'a' is optional in type 'Partial<U>' but required in type 'U'.
+partialOfAllOptionalIsTheSameType.ts(22,54): error TS2322: Type 'Partial<T>' is not assignable to type 'T'.
+  'T' could be instantiated with an arbitrary type which could be unrelated to 'Partial<T>'.
+partialOfAllOptionalIsTheSameType.ts(27,14): error TS2322: Type 'Partial<LateRequired>' is not assignable to type 'LateRequired'.
+  Type 'Partial<LateRequired>' is not assignable to type '{ a: number; }'.
+    Types of property 'a' are incompatible.
+      Type 'number | undefined' is not assignable to type 'number'.
+        Type 'undefined' is not assignable to type 'number'.
+partialOfAllOptionalIsTheSameType.ts(28,14): error TS2322: Type 'Partial<EarlyRequired>' is not assignable to type 'EarlyRequired'.
+  Type 'Partial<EarlyRequired>' is not assignable to type '{ a: number; }'.
+    Types of property 'a' are incompatible.
+      Type 'number | undefined' is not assignable to type 'number'.
+        Type 'undefined' is not assignable to type 'number'.
+
+
+==== partialOfAllOptionalIsTheSameType.ts (5 errors) ====
+    // `Partial<T>` is assignable to `T` when every member of `T` is already
+    // optional, through inheritance too, and to `Readonly<T>`. A `T` with a
+    // required member is not, including one whose required member admits
+    // `undefined`, and neither is a type parameter. In an intersection a member
+    // is required when any constituent requires it, in either order.
+    
+    interface O { a?: string; b?: boolean }
+    interface R { a: string; b?: boolean }
+    interface U { a: string | undefined }
+    interface E extends O { c?: number }
+    declare const po: Partial<O>;
+    declare const pr: Partial<R>;
+    declare const pu: Partial<U>;
+    declare const pe: Partial<E>;
+    declare function g(o: O): O;
+    export const okAllOptional: O = po;
+    export const okReadonly: Readonly<O> = po;
+    export const okInherited: E = pe;
+    export function okArgument(p: { payload: Partial<O> }) { return g(p.payload); }
+    export const badRequired: R = pr;
+                 ~~~~~~~~~~~
+!!! error TS2322: Type 'Partial<R>' is not assignable to type 'R'.
+!!! error TS2322:   Types of property 'a' are incompatible.
+!!! error TS2322:     Type 'string | undefined' is not assignable to type 'string'.
+!!! error TS2322:       Type 'undefined' is not assignable to type 'string'.
+    export const badRequiredUndefined: U = pu;
+                 ~~~~~~~~~~~~~~~~~~~~
+!!! error TS2322: Type 'Partial<U>' is not assignable to type 'U'.
+!!! error TS2322:   Property 'a' is optional in type 'Partial<U>' but required in type 'U'.
+    export function badGeneric<T>(p: Partial<T>) { const t: T = p; return t; }
+                                                         ~
+!!! error TS2322: Type 'Partial<T>' is not assignable to type 'T'.
+!!! error TS2322:   'T' could be instantiated with an arbitrary type which could be unrelated to 'Partial<T>'.
+    type LateRequired = { a?: number } & { a: number };
+    type EarlyRequired = { a: number } & { a?: number };
+    declare const pl: Partial<LateRequired>;
+    declare const pe2: Partial<EarlyRequired>;
+    export const badIntersectionLate: LateRequired = pl;
+                 ~~~~~~~~~~~~~~~~~~~
+!!! error TS2322: Type 'Partial<LateRequired>' is not assignable to type 'LateRequired'.
+!!! error TS2322:   Type 'Partial<LateRequired>' is not assignable to type '{ a: number; }'.
+!!! error TS2322:     Types of property 'a' are incompatible.
+!!! error TS2322:       Type 'number | undefined' is not assignable to type 'number'.
+!!! error TS2322:         Type 'undefined' is not assignable to type 'number'.
+    export const badIntersectionEarly: EarlyRequired = pe2;
+                 ~~~~~~~~~~~~~~~~~~~~
+!!! error TS2322: Type 'Partial<EarlyRequired>' is not assignable to type 'EarlyRequired'.
+!!! error TS2322:   Type 'Partial<EarlyRequired>' is not assignable to type '{ a: number; }'.
+!!! error TS2322:     Types of property 'a' are incompatible.
+!!! error TS2322:       Type 'number | undefined' is not assignable to type 'number'.
+!!! error TS2322:         Type 'undefined' is not assignable to type 'number'.
+    

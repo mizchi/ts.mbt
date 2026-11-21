@@ -117,7 +117,9 @@ test "a nullable alias inside a union loses its nullish members" {
     #|  step(state.pending);
     #|}
   assert_eq(issue_lines(src), [
-    "function badUnguarded > call `step` arg[0]: type `TB | void | TB | null | undefined | void` is not assignable to type `TB`",
+    // The repeated members were printed twice before #332's review, when
+    // the container walk nested one copy of an alias per path.
+    "function badUnguarded > call `step` arg[0]: type `TB | void | null | undefined` is not assignable to type `TB`",
   ])
 }
 
@@ -4261,9 +4263,44 @@ test "an index-only interface's every applicable signature constrains (indexonly
     #|export const okNamed: Both = named;
     #|export const badZero: Both = zeroString;
     #|export const badStrIdx: Both = strIdx;
+    #|declare const neg: { "-1": string };
+    #|declare const frac: { "1.5": string };
+    #|declare const lead: { "01": string };
+    #|declare const exp: { "1e3": string };
+    #|export const okLead: Both = lead;
+    #|export const okExp: Both = exp;
+    #|export const badNeg: Both = neg;
+    #|export const badFrac: Both = frac;
   assert_eq(issue_lines(src), [
     "top-level > binding `badZero` init: expected `Both` but got `{ 0: string }`",
     "top-level > binding `badStrIdx` init: expected `Both` but got `{ [x: string]: string }`",
+    "top-level > binding `badNeg` init: expected `Both` but got `{ -1: string }`",
+    "top-level > binding `badFrac` init: expected `Both` but got `{ 1.5: string }`",
+  ])
+}
+
+///|
+test "a class fits a union holding an overloaded interface it implements (overloadunion)" {
+  let src =
+    #|// @strict: true
+    #|interface Sub { unsubscribe(): void }
+    #|interface SchedulerLike {
+    #|  now(): number;
+    #|  schedule<T>(work: (state: T) => void, delay: number, state: T): Sub;
+    #|  schedule<T>(work: (state?: T) => void, delay?: number, state?: T): Sub;
+    #|}
+    #|declare class Scheduler implements SchedulerLike {
+    #|  now: () => number;
+    #|  schedule<T>(work: (state?: T) => void, delay?: number, state?: T): Sub;
+    #|}
+    #|declare const base: Scheduler;
+    #|declare const count: number;
+    #|declare function throttleTime(duration: number, scheduler?: SchedulerLike): void;
+    #|export function okBase() { throttleTime(16, base); }
+    #|export const okBinding: SchedulerLike | null = base;
+    #|export function badNumber() { throttleTime(16, count); }
+  assert_eq(issue_lines(src), [
+    "function badNumber > call `throttleTime` arg[1]: expected `SchedulerLike` but got `number`",
   ])
 }
 
@@ -4369,5 +4406,143 @@ test "a function expression's this parameter takes no argument (funcexprthis)" {
   assert_eq(issue_lines(src), [
     "function badCallbackArity > call `on` arg[0]: expected `(number) => void` but the function value requires 2 argument(s); a target call signature accepts only 1",
     "top-level > call `plain`: expected 1 argument(s), got 2",
+  ])
+}
+
+///|
+test "Array.isArray splits a union whose member is an alias to a union (isarrayalias)" {
+  let src =
+    #|// @strict: true
+    #|class Base { a = 1 }
+    #|class Err { e = "x" }
+    #|type V = Base | Err;
+    #|export function okAlias(area: V | V[], out: V[][]) {
+    #|  if (Array.isArray(area)) { out.push(area); } else { const one: V = area; return one; }
+    #|  return null;
+    #|}
+    #|export function badElseIsNotArray(area: V | V[]) {
+    #|  if (!Array.isArray(area)) { const xs: V[] = area; return xs; }
+    #|  return null;
+    #|}
+    #|type W = string | number[];
+    #|export function okPlainAlias(w: W) {
+    #|  if (Array.isArray(w)) { const n: number[] = w; return n; }
+    #|  const s: string = w; return s;
+    #|}
+    #|export function badPlainAlias(w: W) {
+    #|  if (Array.isArray(w)) { const s: string = w; return s; }
+    #|  return null;
+    #|}
+  assert_eq(issue_lines(src), [
+    "function badElseIsNotArray > binding `xs` init: expected `V[]` but got `Base | Err`",
+    "function badPlainAlias > binding `s` init: expected `string` but got `number[]`",
+  ])
+}
+
+///|
+test "Partial of an all-optional type is that type (partialalloptional)" {
+  let src =
+    #|// @strict: true
+    #|interface O { a?: string; b?: boolean }
+    #|interface R { a: string; b?: boolean }
+    #|interface E extends O { c?: number }
+    #|declare const po: Partial<O>;
+    #|declare const pr: Partial<R>;
+    #|declare const pe: Partial<E>;
+    #|export const okAllOptional: O = po;
+    #|export const okReadonly: Readonly<O> = po;
+    #|export const okInherited: E = pe;
+    #|export const badRequired: R = pr;
+    #|export function badGeneric<T>(p: Partial<T>) { const t: T = p; return t; }
+    #|type T1 = { a?: number } & { a: number };
+    #|type T2 = { a: number } & { a?: number };
+    #|declare const p1: Partial<T1>;
+    #|declare const p2: Partial<T2>;
+    #|export const badIntersectionLate: T1 = p1;
+    #|export const badIntersectionEarly: T2 = p2;
+  assert_eq(issue_lines(src), [
+    "function badGeneric > binding `t` init: type `Partial<T>` is not assignable to type `T`",
+    "top-level > binding `badRequired` init: type `Partial<R>` is not assignable to type `R`",
+    "top-level > binding `badIntersectionLate` init: type `Partial<T1>` is not assignable to type `T1`",
+    "top-level > binding `badIntersectionEarly` init: type `Partial<T2>` is not assignable to type `T2`",
+  ])
+}
+
+///|
+test "a declaration's object literal narrows a declared union (declobjlit)" {
+  let src =
+    #|// @strict: true
+    #|enum K { Blank = "blank", S = "string", E = "error", N = "number" }
+    #|type RV = { type: K.Blank } | { type: K.S | K.E; value: string } | { type: K.N; value: number };
+    #|type LV = { type: "blank" } | { type: "s"; value: string } | { type: "n"; value: number };
+    #|export function okEnum() { const v: RV = { type: K.S, value: "x" }; const s: string = v.value; return s; }
+    #|export function okLet() { let v: LV = { type: "n", value: 1 }; const n: number = v.value; return n; }
+    #|export function badMember() { const v: LV = { type: "s", value: "x" }; const n: number = v.value; return n; }
+    #|export function badBlank() { const v: LV = { type: "blank" }; return v.value; }
+  assert_eq(issue_lines(src), [
+    "function badMember > binding `n` init: expected `number` but got `string`",
+    "function badBlank > PropAccess `.value`: property `value` does not exist on `{ type: \"blank\" (string) }`",
+  ])
+}
+
+///|
+/// `unwrap_containers` flattens and deduplicates a union's members (#332's
+/// review), and two identical object branches collapse to one. Returned as
+/// a one-member `Union`, that shape missed the object arm of the
+/// structural relation, so univer's `translateRange(isRow ? {…} : {…})`
+/// against `IRange extends IRowRange, IColumnRange` was reported. A union
+/// that deduplicates to one member is that member.
+test "identical object branches relate as one object (samebranches)" {
+  let src =
+    #|// @strict: true
+    #|interface IRowRange { startRow: number; endRow: number }
+    #|interface IColumnRange { startColumn: number; endColumn: number }
+    #|interface IRange extends IRowRange, IColumnRange { rangeType?: number }
+    #|declare function translateRange(range: IRange, dx: number, dy: number): IRange;
+    #|export function okSameBranches(isRow: boolean, a: number, b: number) {
+    #|  const range = isRow
+    #|    ? { startRow: a, endRow: b, startColumn: 0, endColumn: 1 }
+    #|    : { startRow: 0, endRow: 1, startColumn: a, endColumn: b };
+    #|  return translateRange(range, 1, 0);
+    #|}
+    #|export function badSameBranches(isRow: boolean, a: number) {
+    #|  const range = isRow ? { startRow: a, endRow: a } : { startRow: 0, endRow: 1 };
+    #|  return translateRange(range, 1, 0);
+    #|}
+  assert_eq(issue_lines(src), [
+    "function badSameBranches > call `translateRange` arg[0]: expected `IRange` but got `{ startRow: number; endRow: number }`",
+  ])
+}
+
+///|
+/// Aliases that only name each other (`type A = B | C; type B = A | C;
+/// type C = A | B`) are TS2456, and tsc then reads them as `any`, so every
+/// use below is silent there. On main, `keyof A`, an assignment from `A`
+/// and an assignment into `A` hung (each recursed member by member to a
+/// depth bound, two ways at every level) and `{ ...a }` overflowed the
+/// stack. Flattening opened each alias once and found no leaf, and the
+/// first version then read `parts[0]` of the empty result (#332's review).
+/// A union with no leaves has no fields, takes any source, and is not a
+/// known spread shape. `{ ...d }` over an intersection cycle overflowed the
+/// stack on main too.
+test "a union of aliases that only name each other has no leaves (cyclicunion)" {
+  let src =
+    #|// @strict: true
+    #|type A = B | C; type B = A | C; type C = A | B;
+    #|export const okKeyof: keyof A = "x";
+    #|declare const a: A;
+    #|export const okSpread = { ...a };
+    #|export function okFrom(v: A) { const w: { z: number } = v; return w; }
+    #|class K { private p = 1 }
+    #|export function okInto(k: K) { const t: A = k; return t; }
+    #|type D = D & { x: number };
+    #|declare const d: D;
+    #|export const okSpreadIntersection = { ...d };
+  // The TS2456s and nothing else, as tsc reports. `D` is the same cycle
+  // through an intersection, which a union's leaves do not reach, so the
+  // spread walk is depth-bounded as well.
+  assert_eq(issue_lines(src), [
+    "A: type alias resolves to itself without an intervening structural form", "B: type alias resolves to itself without an intervening structural form",
+    "C: type alias resolves to itself without an intervening structural form", "D: type alias resolves to itself without an intervening structural form",
   ])
 }

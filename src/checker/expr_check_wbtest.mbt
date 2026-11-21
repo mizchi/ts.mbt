@@ -23613,3 +23613,33 @@ test "a rest constructor parameter widens a fresh literal" {
     0,
   )
 }
+
+///|
+/// `deep_union_members` expands an alias once per depth it is first reached
+/// at (#332's review). Before, it re-expanded an alias on every path, and
+/// the output carried each leaf once per path: five levels of three aliases
+/// that each name the whole level below, beside a `string`, were 487
+/// members where the union has seven. Eight levels of ten were 10^8.
+test "expr_check: deep_union_members expands a shared alias once" {
+  let sb = StringBuilder()
+  for i in 0..<3 {
+    sb.write_string("interface I\{i} { k\{i}: number }\n")
+    sb.write_string("type L0_\{i} = I\{i} | null;\n")
+  }
+  for l in 1..<6 {
+    let p = l - 1
+    for i in 0..<3 {
+      sb.write_string("type L\{l}_\{i} = L\{p}_0 | L\{p}_1 | L\{p}_2;\n")
+    }
+  }
+  let r = Resolver::from_module(parse_module_or_empty(sb.to_string()))
+  match deep_union_members(r, Union([Named("L5_0"), String_])) {
+    Union(ms) => {
+      assert_eq(ms.length(), 7)
+      assert_true(ms.contains(Named("I2")))
+      assert_true(ms.contains(Null))
+      assert_true(ms.contains(String_))
+    }
+    _ => fail("expected a union")
+  }
+}
