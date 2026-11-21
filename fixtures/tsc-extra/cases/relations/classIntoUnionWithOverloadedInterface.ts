@@ -1,0 +1,29 @@
+// @strict: true
+// @target: esnext
+
+// A class that implements an interface with an overloaded method is
+// assignable to that interface, and so to a union holding it: the optional
+// parameter `scheduler?: SchedulerLike` is `SchedulerLike | undefined`, and a
+// subclass passes too (rxjs's `throttleTime(16, animationFrameScheduler)`).
+// A value that is not one is still an error.
+
+interface TimestampProvider { now(): number; }
+interface Sub { unsubscribe(): void }
+interface SchedulerAction<T> extends Sub { schedule(state?: T, delay?: number): Sub; }
+interface SchedulerLike extends TimestampProvider {
+    schedule<T>(work: (this: SchedulerAction<T>, state: T) => void, delay: number, state: T): Sub;
+    schedule<T>(work: (this: SchedulerAction<T>, state?: T) => void, delay?: number, state?: T): Sub;
+}
+declare class Scheduler implements SchedulerLike {
+    now: () => number;
+    schedule<T>(work: (this: SchedulerAction<T>, state?: T) => void, delay?: number, state?: T): Sub;
+}
+declare class AsyncScheduler extends Scheduler { flush(action: unknown): void; }
+declare const base: Scheduler;
+declare const derived: AsyncScheduler;
+declare const count: number;
+declare function throttleTime(duration: number, scheduler?: SchedulerLike): void;
+export function okBase() { throttleTime(16, base); }
+export function okDerived() { throttleTime(16, derived); }
+export const okBinding: SchedulerLike | null = base;
+export function badNumber() { throttleTime(16, count); }

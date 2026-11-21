@@ -2431,3 +2431,49 @@ test "mtsc graph checker reads an imported primitive const in an unannotated ret
     ],
   )
 }
+
+///|
+/// A CLASS owns the bare name when another reachable module declares an
+/// alias or interface of the same name. univer's `import { Rect } from
+/// './shape/rect'` names a class, and @floating-ui's `type Rect =
+/// Prettify<…>` held the bare entry, which is read before the class table,
+/// so a subclass instance passed to a `Rect` parameter was "expected `type &
+/// {}`". The alias is still reached through its own module's key. An
+/// interface of the class's name (`Panel`) already deferred to the class,
+/// and is kept as the neighbouring case.
+test "mtsc graph checker lets a class own a name a dependency's alias shares" {
+  let module_ = fn(path : String, source : String) -> MtscModuleSource {
+    { path, source, allowJsx: false, }
+  }
+  let edge = fn(from : String, spec : String, to : String) -> MtscModuleEdge {
+    { importerPath: from, moduleSpecifier: spec, targetPath: to, }
+  }
+  let issues = collect_module_graph_issues({
+    modules: [
+      module_(
+        "/src/root.ts", "import { Rect, Panel } from \"./rect\";\nimport { useFl } from \"./other\";\nclass Anchor extends Rect {}\nclass Side extends Panel {}\nfunction att(r: Rect) { return r.width; }\nfunction pin(p: Panel) { return p.open; }\nexport function okSub() { att(new Anchor()); pin(new Side()); }\nexport function okFl() { useFl({ x: 1, y: 1, width: 1, height: 1 }); }\nexport function badNumber() { att(123); }",
+      ),
+      module_(
+        "/src/rect.ts", "export class Rect<T extends { a?: number } = { a?: number }> { width = 1; t?: T }\nexport class Panel { open = true }",
+      ),
+      module_(
+        "/src/fl.d.ts", "declare type Prettify<T> = { [K in keyof T]: T[K] } & {};\ninterface Coords { x: number; y: number }\ninterface Dimensions { width: number; height: number }\nexport declare type Rect = Prettify<Coords & Dimensions>;\nexport interface Panel { kind: \"dep\" }",
+      ),
+      module_(
+        "/src/other.ts", "import type { Rect, Panel } from \"./fl\";\nexport function useFl(r: Rect) { return r; }\nexport function usePanel(p: Panel) { return p.kind; }",
+      ),
+    ],
+    edges: [
+      edge("/src/root.ts", "./rect", "/src/rect.ts"),
+      edge("/src/root.ts", "./other", "/src/other.ts"),
+      edge("/src/other.ts", "./fl", "/src/fl.d.ts"),
+    ],
+  })
+  assert_eq(
+    issues
+    .filter(fn(i) { i.path.contains("okSub") || i.path.contains("okFl") })
+    .map(fn(i) { i.path + ": " + i.message }),
+    [],
+  )
+  assert_eq(issues.filter(fn(i) { i.path.contains("badNumber") }).length(), 1)
+}

@@ -8380,6 +8380,54 @@ product surfaces now.
       `{ [k: string]: string; [k: number]: "ok" }` read as fitting, and so
       did a `string` signature of `string` values. Both were TPs on main,
       where the relation was not decided at all.
+  Batch HV is univer's next categories, one rxjs shape and #331's Minor.
+  univer core goes 6 -> 4, data-validation 11 -> 7, sheets-numfmt 10 -> 8
+  and ui 8 -> 6, excalidraw 42 -> 41 and effect 56 -> 55, with no report at
+  a new site and the oracle unchanged. Each cell was checked against the
+  TS7 nightly first.
+  - **`Array.isArray` opens an alias member.** `array_is_array_split`
+    classified each member of the unwrapped union, and a member that is
+    itself an alias to a union (univer's `MultiAreaValue | MultiAreaValue[]`,
+    with `MultiAreaValue = BaseReferenceObject | ErrorValueObject`) unwrapped
+    to a union the loop cannot classify, so the split abstained and
+    `this._areas.push(area)` was judged against the whole union. The union
+    is expanded through `expand_union_alias_members` first.
+  - **A class owns the bare name a dependency's alias shares.** A graph
+    check keys a name two reachable modules declare (`Name@<path>`), except
+    a CLASS, which cannot be keyed and keeps the bare name. The bare entry
+    still held the other module's ALIAS, and `unwrap` reads aliases before
+    classes, so univer's `Rect` class read as @floating-ui's `type Rect =
+    Prettify<…>`, and a `TransformerAnchor` argument was "expected `type &
+    {}`". A keyed alias now skips the bare registration when another
+    reachable module declares a class of its name. The interface arm was
+    written and removed: its mutation survived, because an interface of the
+    class's name already defers to the class.
+  - **`Partial<T>` into an all-optional `T`.** The Partial/Required lattice
+    rule reported `Partial<T>` into `T` whenever the cores matched, which is
+    wrong when every member of `T` is already optional (univer's
+    `Partial<IDataValidationRuleOptions>`). A shape `cast_shape_fields` can
+    enumerate with no required member is a no-op now; a type parameter
+    still reports. A required `x: T | undefined` reads as optional, since
+    the parser stores `x?: T` that way, and is a declared MISS.
+  - **A declaration narrows by its object literal.** tsc's
+    `getAssignmentReducedType` was applied to an ASSIGNMENT only, so `const
+    v: RecordValue = { type: RecordValueType.String, value: '…' }` kept the
+    whole union and `v.value` read as missing on the `Blank` member. The
+    declaration path calls the same helper now, which also reports a
+    property the picked member lacks (two new TPs in the probe).
+  - **An overloaded interface inside a union target.** A class implementing
+    an interface with overloaded methods passed against the bare interface
+    because overloaded shapes abstain, and was reported against `SchedulerLike
+    | undefined`, the type of every optional parameter (rxjs's
+    `throttleTime(16, animationFrameScheduler)`). Found by bisecting with a
+    tsc-acceptance guard: a reducer that does not keep tsc accepting the file
+    reduces to an unrelated error. A union member with overloads abstains the
+    same way, except for a primitive source.
+  - **#331's Minor.** The index-only relation took a property as numeric by
+    its digits, so `"-1"` and `"1.5"` missed the `number` signature and
+    `"01"` met it. It now uses tsc's `isNumericLiteralName`, the round trip
+    `(+name).toString() === name`, through `is_round_trip_number_string`
+    plus `NaN` / `Infinity` / `-Infinity`.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

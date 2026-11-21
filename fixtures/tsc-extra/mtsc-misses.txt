@@ -87,3 +87,4 @@ libStringAliasInUnionTarget:badWithUndefined  same cause as `badBare`; the alias
 homomorphicMappedAliasOverNullable:badNumber  the mapped member stays ONE mapped type over the object members, which a primitive source is not judged against, so the union target abstains
 homomorphicMappedAliasOverNullable:badMember  a member read through a mapped type over an interface is not resolved, so `x.r` is not typed after the guard
 homomorphicMappedAliasOverNullable:badString  same cause as `badNumber`: the `Opt<Cell>` member abstains, so the `number` member alone does not decide the union
+partialOfAllOptionalIsTheSameType:badRequiredUndefined  the parser stores `x?: T` as `T | undefined`, so a required member written `T | undefined` reads as optional and `Partial<U>` into `U` is taken as a no-op

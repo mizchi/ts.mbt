@@ -1642,6 +1642,7 @@ fn Resolver::ingest_type_module(
   skip~ : Map[String, Unit] = Map([]),
   renames~ : Map[String, String] = Map([]),
   reuse_unkeyed~ : Bool = false,
+  class_owned~ : Map[String, Unit] = Map([]),
 ) -> Unit {
   Resolver::record_unique_symbol_names(r, module_, prefix)
   let types = if cache_key == "" {
@@ -1914,6 +1915,16 @@ fn Resolver::ingest_type_module(
       Some(key) => {
         r.type_aliases[key] = alias_
         r.colliding_type_names[name] = ()
+        // A CLASS of this name in another reachable module owns the bare
+        // entry, because a class cannot be keyed (see the caller) and this
+        // alias is reachable through its key. univer's `import { Rect }
+        // from './shape/rect'` names a class, and @floating-ui's `type Rect
+        // = Prettify<…>` held the bare entry, which `unwrap` reads before
+        // the class table, so a `Rect` parameter was judged against the
+        // alias. An interface of the same name already defers to the class.
+        if class_owned.contains(name) {
+          continue
+        }
       }
       None => ()
     }
@@ -2007,7 +2018,12 @@ fn array_is_array_split(
   resolver : Resolver,
   cur : @ast.TsType,
 ) -> (@ast.TsType, @ast.TsType)? {
-  let parts = union_components(resolver.unwrap(cur))
+  // A member that is itself an alias to a union is opened first:
+  // univer's `addArea(area: MultiAreaValue | MultiAreaValue[])`, with
+  // `MultiAreaValue = BaseReferenceObject | ErrorValueObject`, kept the
+  // alias as one member the loop below cannot classify, and the split
+  // abstained.
+  let parts = union_components(expand_union_alias_members(resolver, cur))
   if parts.length() < 2 {
     return None
   }
@@ -22033,8 +22049,30 @@ fn check_expr_against_shape(
   {
     let (exp_core, exp_lvl) = optionality_level(expected)
     let (inf_core, inf_lvl) = optionality_level(inferred)
+    // `Partial<T>` into `T` changes nothing when every member of `T` is
+    // already optional: univer's `getRuleOptions(payload.payload)` passes a
+    // `Partial<IDataValidationRuleOptions>`, whose members are all `?`, and
+    // tsc accepts it. Only a shape that can be enumerated counts, so a type
+    // parameter still reports. A member typed `T | undefined` reads as
+    // optional here, since the parser stores `x?: T` that way, which costs
+    // the required `x: T | undefined` case as a MISS.
+    let partial_is_noop = inf_lvl == 2 &&
+      exp_lvl == 1 &&
+      (match cast_shape_fields(ctx.resolver, exp_core, 0) {
+        Some(fields) => {
+          let mut none_required = true
+          for _, required in fields {
+            if required {
+              none_required = false
+            }
+          }
+          none_required
+        }
+        None => false
+      })
     if inf_lvl > exp_lvl &&
       (exp_lvl != 1 || inf_lvl != 1) &&
+      !partial_is_noop &&
       equivalent(exp_core, inf_core) {
       record(
         ctx,
@@ -22940,6 +22978,17 @@ fn check_expr_against_shape(
       )
     }
     return
+  }
+  // The same holds for a UNION target with an overload-bearing member: an
+  // optional parameter typed by one (`scheduler?: SchedulerLike`, rxjs's
+  // `throttleTime`) is that union, and a class implementing the interface
+  // was reported against it while the same class passed for the bare
+  // interface.
+  match ctx.resolver.unwrap(expected_u) {
+    Union(members) if !is_concrete_primitive_or_literal(inferred_u) &&
+      members.iter().any(fn(m) { shape_has_overloads(m, ctx.resolver) }) =>
+      return
+    _ => ()
   }
   match (inferred_u, expected_u) {
     (Applied(_, _), _) | (_, Applied(_, _)) => {
@@ -37894,8 +37943,13 @@ fn object_fits_index_only_interface(
   .all(fn(f) {
     let numeric_key = match f.0 {
       Literal(k) if k.has_prefix("@@") => return false
+      // tsc's `isNumericLiteralName`, `(+name).toString() === name`: `"-1"`
+      // and `"1.5"` are numeric names, `"01"` and `"1e3"` are not (probed).
       Literal(k) =>
-        k.length() > 0 && k.iter().all(fn(c) { c >= '0' && c <= '9' })
+        is_round_trip_number_string(k) ||
+        k == "NaN" ||
+        k == "Infinity" ||
+        k == "-Infinity"
       String_ | Number => true
       _ => return false
     }
@@ -38668,6 +38722,17 @@ fn check_ident_binding_decl(
     narrow_declared_nullish_by_init(env, ctx, name, declared, init)
   }
   narrow_declared_member_by_init(env, ctx, name, declared, init)
+  // A declaration initialized with an object literal narrows a declared
+  // union of object shapes the way an assignment does. univer's `const
+  // value: RecordValue = { type: RecordValueType.String, value: '…' }`
+  // kept the whole union, and `value.value` read as missing on the
+  // `{ type: RecordValueType.Blank }` member.
+  if init is ObjectLit(_) && is_checkable(declared) {
+    let ty = infer_expr(env, ctx.resolver, init)
+    if is_checkable(ty) {
+      let _ = narrow_to_fitting_object_members(env, ctx, name, ty)
+    }
+  }
   if !mutable_ && block_scoped {
     record_aliased_condition(env, ctx.resolver, name, init)
   }
@@ -39908,21 +39973,10 @@ fn narrow_after_assignment(
   // `{ a: number; b?: undefined } | { a: number; b: string }`, `a1.b` is
   // `undefined`; narrowing to the literal's `{ a: number }` made `.b` an
   // unknown property.
-  if value is ObjectLit(_) && is_checkable(new_ty) {
-    match env.lookup_declared(name) {
-      Some(d) =>
-        match ctx.resolver.unwrap(d) {
-          Union(ms) if ms.iter().all(fn(m) { m is (Object(_) | Struct(_, _)) }) => {
-            let kept = ms.filter(fn(m) { object_literal_fits_member(new_ty, m) })
-            if kept.length() > 0 {
-              env.narrow(name, union_of(kept))
-              return
-            }
-          }
-          _ => ()
-        }
-      None => ()
-    }
+  if value is ObjectLit(_) &&
+    is_checkable(new_ty) &&
+    narrow_to_fitting_object_members(env, ctx, name, new_ty) {
+    return
   }
   if is_checkable(new_ty) {
     env.narrow(name, new_ty)
@@ -39955,6 +40009,34 @@ fn narrow_after_assignment(
         }
       None => ()
     }
+  }
+}
+
+///|
+/// tsc's `getAssignmentReducedType` for an object literal `ty` written into
+/// `name`: a declared UNION of object shapes narrows to the members `ty` is
+/// assignable to. Whether anything was narrowed is returned, so a caller
+/// can fall back to its own rule when no member fits.
+fn narrow_to_fitting_object_members(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  name : String,
+  ty : @ast.TsType,
+) -> Bool {
+  match env.lookup_declared(name) {
+    Some(d) =>
+      match ctx.resolver.unwrap(d) {
+        Union(ms) if ms.iter().all(fn(m) { m is (Object(_) | Struct(_, _)) }) => {
+          let kept = ms.filter(fn(m) { object_literal_fits_member(ty, m) })
+          if kept.length() > 0 {
+            env.narrow(name, union_of(kept))
+            return true
+          }
+          false
+        }
+        _ => false
+      }
+    None => false
   }
 }
 
@@ -60235,6 +60317,7 @@ fn check_module_function_bodies_layered(
       cache_key~,
       skip=own_type_names,
       renames~,
+      class_owned=foreign_class_names,
       // Unchanged by the move, it is the program's own ambient module and
       // its ingestion can be shared with every other checked module.
       reuse_unkeyed=cache_key == "" && physical_equal(moved, type_module),

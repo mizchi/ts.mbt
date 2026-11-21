@@ -4261,9 +4261,44 @@ test "an index-only interface's every applicable signature constrains (indexonly
     #|export const okNamed: Both = named;
     #|export const badZero: Both = zeroString;
     #|export const badStrIdx: Both = strIdx;
+    #|declare const neg: { "-1": string };
+    #|declare const frac: { "1.5": string };
+    #|declare const lead: { "01": string };
+    #|declare const exp: { "1e3": string };
+    #|export const okLead: Both = lead;
+    #|export const okExp: Both = exp;
+    #|export const badNeg: Both = neg;
+    #|export const badFrac: Both = frac;
   assert_eq(issue_lines(src), [
     "top-level > binding `badZero` init: expected `Both` but got `{ 0: string }`",
     "top-level > binding `badStrIdx` init: expected `Both` but got `{ [x: string]: string }`",
+    "top-level > binding `badNeg` init: expected `Both` but got `{ -1: string }`",
+    "top-level > binding `badFrac` init: expected `Both` but got `{ 1.5: string }`",
+  ])
+}
+
+///|
+test "a class fits a union holding an overloaded interface it implements (overloadunion)" {
+  let src =
+    #|// @strict: true
+    #|interface Sub { unsubscribe(): void }
+    #|interface SchedulerLike {
+    #|  now(): number;
+    #|  schedule<T>(work: (state: T) => void, delay: number, state: T): Sub;
+    #|  schedule<T>(work: (state?: T) => void, delay?: number, state?: T): Sub;
+    #|}
+    #|declare class Scheduler implements SchedulerLike {
+    #|  now: () => number;
+    #|  schedule<T>(work: (state?: T) => void, delay?: number, state?: T): Sub;
+    #|}
+    #|declare const base: Scheduler;
+    #|declare const count: number;
+    #|declare function throttleTime(duration: number, scheduler?: SchedulerLike): void;
+    #|export function okBase() { throttleTime(16, base); }
+    #|export const okBinding: SchedulerLike | null = base;
+    #|export function badNumber() { throttleTime(16, count); }
+  assert_eq(issue_lines(src), [
+    "function badNumber > call `throttleTime` arg[1]: expected `SchedulerLike` but got `number`",
   ])
 }
 
@@ -4369,5 +4404,63 @@ test "a function expression's this parameter takes no argument (funcexprthis)" {
   assert_eq(issue_lines(src), [
     "function badCallbackArity > call `on` arg[0]: expected `(number) => void` but the function value requires 2 argument(s); a target call signature accepts only 1",
     "top-level > call `plain`: expected 1 argument(s), got 2",
+  ])
+}
+
+///|
+test "Array.isArray splits a union whose member is an alias to a union (isarrayalias)" {
+  let src =
+    #|// @strict: true
+    #|class Base { a = 1 }
+    #|class Err { e = "x" }
+    #|type V = Base | Err;
+    #|export function okAlias(area: V | V[], out: V[][]) {
+    #|  if (Array.isArray(area)) { out.push(area); } else { const one: V = area; return one; }
+    #|  return null;
+    #|}
+    #|export function badElseIsNotArray(area: V | V[]) {
+    #|  if (!Array.isArray(area)) { const xs: V[] = area; return xs; }
+    #|  return null;
+    #|}
+  assert_eq(issue_lines(src), [
+    "function badElseIsNotArray > binding `xs` init: expected `V[]` but got `Base | Err`",
+  ])
+}
+
+///|
+test "Partial of an all-optional type is that type (partialalloptional)" {
+  let src =
+    #|// @strict: true
+    #|interface O { a?: string; b?: boolean }
+    #|interface R { a: string; b?: boolean }
+    #|interface E extends O { c?: number }
+    #|declare const po: Partial<O>;
+    #|declare const pr: Partial<R>;
+    #|declare const pe: Partial<E>;
+    #|export const okAllOptional: O = po;
+    #|export const okReadonly: Readonly<O> = po;
+    #|export const okInherited: E = pe;
+    #|export const badRequired: R = pr;
+    #|export function badGeneric<T>(p: Partial<T>) { const t: T = p; return t; }
+  assert_eq(issue_lines(src), [
+    "function badGeneric > binding `t` init: type `Partial<T>` is not assignable to type `T`",
+    "top-level > binding `badRequired` init: type `Partial<R>` is not assignable to type `R`",
+  ])
+}
+
+///|
+test "a declaration's object literal narrows a declared union (declobjlit)" {
+  let src =
+    #|// @strict: true
+    #|enum K { Blank = "blank", S = "string", E = "error", N = "number" }
+    #|type RV = { type: K.Blank } | { type: K.S | K.E; value: string } | { type: K.N; value: number };
+    #|type LV = { type: "blank" } | { type: "s"; value: string } | { type: "n"; value: number };
+    #|export function okEnum() { const v: RV = { type: K.S, value: "x" }; const s: string = v.value; return s; }
+    #|export function okLet() { let v: LV = { type: "n", value: 1 }; const n: number = v.value; return n; }
+    #|export function badMember() { const v: LV = { type: "s", value: "x" }; const n: number = v.value; return n; }
+    #|export function badBlank() { const v: LV = { type: "blank" }; return v.value; }
+  assert_eq(issue_lines(src), [
+    "function badMember > binding `n` init: expected `number` but got `string`",
+    "function badBlank > PropAccess `.value`: property `value` does not exist on `{ type: \"blank\" (string) }`",
   ])
 }

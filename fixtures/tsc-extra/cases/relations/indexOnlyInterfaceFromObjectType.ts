@@ -4,7 +4,9 @@
 // An object type is assignable to an interface that declares only index
 // signatures when every member fits every signature that applies to it: a
 // `string` signature applies to every member, and a `number` signature to a
-// numeric-named property and to a `string` or `number` signature. So a
+// numeric-named property and to a `string` or `number` signature. A name is
+// numeric when it is the canonical spelling of a number (`"-1"`, `"1.5"`,
+// `"NaN"`), so `"01"` and `"1e3"` are not. So a
 // `string` signature also fits a `number` one when its value does. A value
 // that does not fit is an error, also when it fits another signature.
 
@@ -37,3 +39,13 @@ export const okStrIdx: Both = strIdxOk;
 export const okNamed: Both = named;
 export const badZero: Both = zeroString;
 export const badStrIdx: Both = strIdx;
+declare const neg: { "-1": string };
+declare const frac: { "1.5": string };
+declare const nan: { "NaN": string };
+declare const lead: { "01": string };
+declare const exp: { "1e3": string };
+export const okLeadingZero: Both = lead;
+export const okExponent: Both = exp;
+export const badNegative: Both = neg;
+export const badFraction: Both = frac;
+export const badNaN: Both = nan;
