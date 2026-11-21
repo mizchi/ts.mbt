@@ -1,0 +1,46 @@
+jsxTypeArgumentsAreTypeScript.tsx(15,42): error TS1125: Hexadecimal digit expected.
+jsxTypeArgumentsAreTypeScript.tsx(17,46): error TS2695: Left side of comma operator is unused and has no side effects.
+jsxTypeArgumentsAreTypeScript.tsx(17,60): error TS1125: Hexadecimal digit expected.
+jsxTypeArgumentsAreTypeScript.tsx(17,66): error TS1109: Expression expected.
+jsxTypeArgumentsAreTypeScript.tsx(18,62): error TS2695: Left side of comma operator is unused and has no side effects.
+jsxTypeArgumentsAreTypeScript.tsx(18,68): error TS1125: Hexadecimal digit expected.
+jsxTypeArgumentsAreTypeScript.tsx(18,75): error TS1109: Expression expected.
+jsxTypeArgumentsAreTypeScript.tsx(19,47): error TS1010: '*/' expected.
+
+
+==== jsxTypeArgumentsAreTypeScript.tsx (8 errors) ====
+    // A JSX element's type arguments are TypeScript, not JSX text, so a
+    // malformed numeric literal there is an error; the element's text is still
+    // text. A payload inside a parenthesized expression that does not parse is
+    // still read, and an unterminated block comment after an element starts
+    // outside it (a `/*` inside JSX text is `jsxTextOpensNoBlockComment`).
+    
+    declare global {
+      namespace JSX {
+        interface IntrinsicElements { p: {}; b: {} }
+      }
+    }
+    
+    declare function Box<T>(p: { children?: unknown }): any;
+    
+    export const badTypeArgumentHex = <Box<0x> />;
+                                             
+!!! error TS1125: Hexadecimal digit expected.
+    export const okTypeArgumentText = <Box<string>>08 px</Box>;
+    export const badPayloadInFailedParens = <p>{(true && <b>{0x}</b>,)}</p>;
+                                                 ~~~~~~~~~~~~~~~~~~~
+!!! error TS2695: Left side of comma operator is unused and has no side effects.
+                                                               
+!!! error TS1125: Hexadecimal digit expected.
+                                                                     ~
+!!! error TS1109: Expression expected.
+    export const badPayloadInFailedForHead = <p>{(() => { for (; <b>{0x}</b>, ; ) {} })()}</p>;
+                                                                 ~~~~~~~~~~~
+!!! error TS2695: Left side of comma operator is unused and has no side effects.
+                                                                       
+!!! error TS1125: Hexadecimal digit expected.
+                                                                              ~
+!!! error TS1109: Expression expected.
+    export const badCommentAfterElement = <p /> /*
+                                                  
+!!! error TS1010: '*/' expected.

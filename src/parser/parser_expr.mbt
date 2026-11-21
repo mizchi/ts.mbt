@@ -1591,16 +1591,25 @@ fn Parser::parse_parenthesized_expr(
   self.inherit_source_flags(temp)
   self.inherit_expression_context(temp)
 
-  let expr = temp.parse_expr()
-  if !temp.check(Eof) {
-    raise ParseError("Expected RParen, got \{temp.peek().kind}")
-  }
   // The temp parser records grammar misuses into its own channel; without
   // this hand-off a misuse inside a parenthesized expression (`({ b:
   // yield 2 })` in a non-generator context) silently vanishes. Appending
-  // here keeps the parse-order position the emission loop relies on.
+  // here keeps the parse-order position the emission loop relies on. It
+  // runs on the failure path too: a JSX payload in here has already
+  // taken its lexer diagnostic out of the shared `jsx_lexer_diags`, so
+  // `(true && <b>{0x}</b>,)` would otherwise lose the TS1125.
+  let parsed : Result[@ast.TsExpr, ParseError] = Ok(temp.parse_expr()) catch {
+    e => Err(e)
+  }
   for gm in temp.grammar_misuses {
     self.grammar_misuses.push(gm)
+  }
+  let expr = match parsed {
+    Ok(e) => e
+    Err(e) => raise e
+  }
+  if !temp.check(Eof) {
+    raise ParseError("Expected RParen, got \{temp.peek().kind}")
   }
   self.pos = end_idx + 1
   expr
@@ -1678,14 +1687,21 @@ fn Parser::parse_expr_until_top_level(
   self.inherit_source_flags(temp)
   self.inherit_expression_context(temp)
 
-  let expr = temp.parse_expr()
-  if !temp.check(Eof) {
-    raise ParseError("Expected \{terminator}, got \{temp.peek().kind}")
-  }
   // Same grammar-misuse hand-off as the parenthesized-expression helper
-  // above: the temp parser's recordings would otherwise vanish.
+  // above, on the failure path too: the temp parser's recordings would
+  // otherwise vanish.
+  let parsed : Result[@ast.TsExpr, ParseError] = Ok(temp.parse_expr()) catch {
+    e => Err(e)
+  }
   for gm in temp.grammar_misuses {
     self.grammar_misuses.push(gm)
+  }
+  let expr = match parsed {
+    Ok(e) => e
+    Err(e) => raise e
+  }
+  if !temp.check(Eof) {
+    raise ParseError("Expected \{terminator}, got \{temp.peek().kind}")
   }
   self.pos = end_idx
   expr
@@ -2605,6 +2621,26 @@ fn Parser::parse_jsx_opening_header(
       j += 1
     }
     if depth == 0 {
+      // The type arguments are TypeScript, not JSX text, so the element
+      // must not forgive a lexer diagnostic inside them: `<Box<0x> />`
+      // is TS1125. Taken out of the shared list here and reported now,
+      // before the element's forgiveness runs over its range.
+      let diags = self.jsx_lexer_diags
+      let type_args_start = i
+      if diags.iter().any(fn(d) { d.0 >= type_args_start && d.0 < j }) {
+        let kept = []
+        for d in diags {
+          if d.0 >= type_args_start && d.0 < j {
+            self.grammar_misuses.push(d.1)
+          } else {
+            kept.push(d)
+          }
+        }
+        diags.clear()
+        for d in kept {
+          diags.push(d)
+        }
+      }
       i = j
     }
   }

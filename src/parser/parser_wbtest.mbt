@@ -8909,3 +8909,43 @@ test "parser: a JSX payload line comment ends at LS and PS (jsxcommentls)" {
   let lf = Parser::from_source_with_jsx("x // a\nb", true)
   assert_eq(lf.skip_source_line_comment(2), 7)
 }
+
+///|
+/// Three ways a JSX element used to forgive a lexer diagnostic that is not
+/// in JSX text (probed: tsc reports each): the element's TYPE ARGUMENTS are
+/// TypeScript, a payload inside a parenthesized expression that fails to
+/// parse still read its tokens, and an unterminated `/*` right after an
+/// element starts outside it.
+test "parser: JSX type arguments, failed sub-parses and a trailing comment (jsxlexerdiags2)" {
+  let misuses = fn(src : String) -> Array[String] raise {
+    let module_ = Parser::from_source_with_jsx(src, true).parse_module()
+    module_.grammar_misuses.filter(fn(m) { is_lexer_diag_message(m) })
+  }
+  assert_eq(
+    misuses(
+      "declare function Box<T>(p: {}): any;\nexport const a = <Box<0x> />;\n",
+    ),
+    ["hexadecimal digit expected"],
+  )
+  // The type arguments are skipped, not the whole element: its text is
+  // still forgiven.
+  assert_eq(
+    misuses(
+      "declare function Box<T>(p: {}): any;\nexport const a = <Box<string>>08 px</Box>;\n",
+    ),
+    [],
+  )
+  assert_eq(misuses("export const a = <p>{(true && <b>{0x}</b>,)}</p>;\n"), [
+    "hexadecimal digit expected",
+  ])
+  // The same hand-off for the sub-parser a `for` head's condition uses.
+  assert_eq(
+    misuses(
+      "export const a = <p>{(() => { for (; <b>{0x}</b>, ; ) {} })()}</p>;\n",
+    ),
+    ["hexadecimal digit expected"],
+  )
+  assert_eq(misuses("export const x = <p /> /*"), ["`*/` expected"])
+  assert_eq(misuses("export const x = <p>a</p> /*"), ["`*/` expected"])
+  assert_eq(misuses("export const x = <p>a /* b</p>;\n"), [])
+}

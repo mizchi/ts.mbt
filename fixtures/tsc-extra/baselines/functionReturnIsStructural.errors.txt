@@ -4,9 +4,11 @@ functionReturnIsStructural.ts(17,14): error TS2322: Type '() => { a: string; }' 
       Type 'string' is not assignable to type 'number'.
 functionReturnIsStructural.ts(32,14): error TS2322: Type '() => Source' is not assignable to type '() => Target'.
   Property 'required' is missing in type 'Source' but required in type 'Target'.
+functionReturnIsStructural.ts(41,14): error TS2322: Type '() => Source' is not assignable to type '() => TargetAbstract'.
+  Property 'req' is missing in type 'Source' but required in type 'TargetAbstract'.
 
 
-==== functionReturnIsStructural.ts (2 errors) ====
+==== functionReturnIsStructural.ts (3 errors) ====
     // A function type's return is compared structurally: `() => { a: number }`
     // is a `() => A` for `interface A { a: number }`. A mutable `Map` or `Set`
     // is its readonly view, there and anywhere else.
@@ -50,4 +52,15 @@ functionReturnIsStructural.ts(32,14): error TS2322: Type '() => Source' is not a
 !!! related TS2728 functionReturnIsStructural.ts:30:25: 'required' is declared here.
     declare const gt: () => Target;
     export const okClassSubtype: () => Source = gt;
+    
+    // An OPTIONAL method of the target class may be absent from the source; a
+    // required one, abstract or not, may not.
+    class TargetOptional { tag = 1; optional?(): void; }
+    export const okOptionalMethod: () => TargetOptional = gs;
+    abstract class TargetAbstract { tag = 1; optional?(): void; abstract req(): void; }
+    export const badAbstractMethod: () => TargetAbstract = gs;
+                 ~~~~~~~~~~~~~~~~~
+!!! error TS2322: Type '() => Source' is not assignable to type '() => TargetAbstract'.
+!!! error TS2322:   Property 'req' is missing in type 'Source' but required in type 'TargetAbstract'.
+!!! related TS2728 functionReturnIsStructural.ts:40:70: 'req' is declared here.
     

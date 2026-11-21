@@ -1,0 +1,22 @@
+jsxTextOpensNoBlockComment.tsx(11,14): error TS2322: Type 'number' is not assignable to type 'string'.
+jsxTextOpensNoBlockComment.tsx(12,46): error TS2322: Type 'string' is not assignable to type 'number'.
+
+
+==== jsxTextOpensNoBlockComment.tsx (2 errors) ====
+    // JSX text is not JavaScript: a `/*` in JSX text is text, not the start of a comment, so
+    // the declarations after the element are still checked.
+    
+    declare global {
+      namespace JSX {
+        interface IntrinsicElements { p: {} }
+      }
+    }
+    
+    export const okOpenerInText = <p>a /* b</p>;
+    export const badAfterElement: string = 1;
+                 ~~~~~~~~~~~~~~~
+!!! error TS2322: Type 'number' is not assignable to type 'string'.
+    export function badLaterFunction(): number { return "s"; }
+                                                 ~~~~~~
+!!! error TS2322: Type 'string' is not assignable to type 'number'.
+    

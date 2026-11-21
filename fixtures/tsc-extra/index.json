@@ -127,6 +127,71 @@
       "claims": []
     },
     {
+      "case": "classes/implementsMethodParametersBivariant.ts",
+      "area": "classes",
+      "name": "implementsMethodParametersBivariant",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322,
+        2416
+      ],
+      "baseline": "baselines/implementsMethodParametersBivariant.errors.txt",
+      "claims": [
+        {
+          "name": "OkDefault",
+          "kind": "ok",
+          "fromLine": 10,
+          "toLine": 12
+        },
+        {
+          "name": "OkRequired",
+          "kind": "ok",
+          "fromLine": 13,
+          "toLine": 15
+        },
+        {
+          "name": "OkRequiredString",
+          "kind": "ok",
+          "fromLine": 17,
+          "toLine": 20
+        },
+        {
+          "name": "OkFewerCallbackParams",
+          "kind": "ok",
+          "fromLine": 25,
+          "toLine": 28
+        },
+        {
+          "name": "okAssignToInterface",
+          "kind": "ok",
+          "fromLine": 29,
+          "toLine": 30
+        },
+        {
+          "name": "BadParam",
+          "kind": "bad",
+          "fromLine": 31,
+          "toLine": 33
+        },
+        {
+          "name": "BadReturn",
+          "kind": "bad",
+          "fromLine": 35,
+          "toLine": 37
+        },
+        {
+          "name": "badAssignToInterface",
+          "kind": "bad",
+          "fromLine": 39,
+          "toLine": 40
+        }
+      ]
+    },
+    {
       "case": "classes/inheritedOverloadSetOnGenericBaseClass.ts",
       "area": "classes",
       "name": "inheritedOverloadSetOnGenericBaseClass",
@@ -861,6 +926,52 @@
       ]
     },
     {
+      "case": "controlFlow/closureAssignsModuleBinding.ts",
+      "area": "controlFlow",
+      "name": "closureAssignsModuleBinding",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/closureAssignsModuleBinding.errors.txt",
+      "claims": [
+        {
+          "name": "okNullAfterNarrowing",
+          "kind": "ok",
+          "fromLine": 9,
+          "toLine": 16
+        },
+        {
+          "name": "okPlainNull",
+          "kind": "ok",
+          "fromLine": 18,
+          "toLine": 22
+        },
+        {
+          "name": "badClosureString",
+          "kind": "bad",
+          "fromLine": 23,
+          "toLine": 27
+        },
+        {
+          "name": "okLocalBinding",
+          "kind": "ok",
+          "fromLine": 28,
+          "toLine": 35
+        },
+        {
+          "name": "badInferredFromFunction",
+          "kind": "bad",
+          "fromLine": 37,
+          "toLine": 38
+        }
+      ]
+    },
+    {
       "case": "controlFlow/constGuardsLibInstancesAndAnyJoins.ts",
       "area": "controlFlow",
       "name": "constGuardsLibInstancesAndAnyJoins",
@@ -1245,6 +1356,70 @@
           "kind": "bad",
           "fromLine": 6,
           "toLine": 7
+        }
+      ]
+    },
+    {
+      "case": "controlFlow/functionConditionUsedInGuardedBody.ts",
+      "area": "controlFlow",
+      "name": "functionConditionUsedInGuardedBody",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2774
+      ],
+      "baseline": "baselines/functionConditionUsedInGuardedBody.errors.txt",
+      "claims": [
+        {
+          "name": "okUsedAnd",
+          "kind": "ok",
+          "fromLine": 8,
+          "toLine": 8
+        },
+        {
+          "name": "badUnusedAnd",
+          "kind": "bad",
+          "fromLine": 9,
+          "toLine": 9
+        },
+        {
+          "name": "okUsedIf",
+          "kind": "ok",
+          "fromLine": 10,
+          "toLine": 10
+        },
+        {
+          "name": "okUsedTernary",
+          "kind": "ok",
+          "fromLine": 11,
+          "toLine": 11
+        },
+        {
+          "name": "badUnusedIf",
+          "kind": "bad",
+          "fromLine": 12,
+          "toLine": 12
+        },
+        {
+          "name": "okUsedAsValue",
+          "kind": "ok",
+          "fromLine": 13,
+          "toLine": 13
+        },
+        {
+          "name": "okUsedInConditionAnd",
+          "kind": "ok",
+          "fromLine": 14,
+          "toLine": 15
+        },
+        {
+          "name": "okNarrowedOptional",
+          "kind": "ok",
+          "fromLine": 17,
+          "toLine": 24
         }
       ]
     },
@@ -6565,6 +6740,29 @@
       "claims": []
     },
     {
+      "case": "parser/jsxPayloadFailsBeforeItsEnd.tsx",
+      "area": "parser",
+      "name": "jsxPayloadFailsBeforeItsEnd",
+      "options": {
+        "jsx": "preserve"
+      },
+      "accepted": false,
+      "codes": [
+        1005,
+        1125,
+        2872
+      ],
+      "baseline": "baselines/jsxPayloadFailsBeforeItsEnd.errors.txt",
+      "claims": [
+        {
+          "name": "badPayloadMissingSemicolon",
+          "kind": "bad",
+          "fromLine": 11,
+          "toLine": 12
+        }
+      ]
+    },
+    {
       "case": "parser/jsxPayloadIsJavaScript.tsx",
       "area": "parser",
       "name": "jsxPayloadIsJavaScript",
@@ -6675,28 +6873,142 @@
           "toLine": 15
         },
         {
-          "name": "okBacktickInText",
+          "name": "okSymbolInText",
           "kind": "ok",
           "fromLine": 16,
           "toLine": 16
         },
         {
-          "name": "okSymbolInText",
-          "kind": "ok",
-          "fromLine": 17,
-          "toLine": 17
-        },
-        {
           "name": "okMultilineClass",
           "kind": "ok",
-          "fromLine": 18,
-          "toLine": 22
+          "fromLine": 17,
+          "toLine": 21
         },
         {
           "name": "okNestedText",
           "kind": "ok",
-          "fromLine": 24,
-          "toLine": 25
+          "fromLine": 23,
+          "toLine": 24
+        },
+        {
+          "name": "okBacktickInText",
+          "kind": "ok",
+          "fromLine": 25,
+          "toLine": 26
+        }
+      ]
+    },
+    {
+      "case": "parser/jsxTextOpensNoBlockComment.tsx",
+      "area": "parser",
+      "name": "jsxTextOpensNoBlockComment",
+      "options": {
+        "jsx": "preserve"
+      },
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/jsxTextOpensNoBlockComment.errors.txt",
+      "claims": [
+        {
+          "name": "okOpenerInText",
+          "kind": "ok",
+          "fromLine": 10,
+          "toLine": 10
+        },
+        {
+          "name": "badAfterElement",
+          "kind": "bad",
+          "fromLine": 11,
+          "toLine": 11
+        },
+        {
+          "name": "badLaterFunction",
+          "kind": "bad",
+          "fromLine": 12,
+          "toLine": 13
+        }
+      ]
+    },
+    {
+      "case": "parser/jsxTextOpensNoTemplate.tsx",
+      "area": "parser",
+      "name": "jsxTextOpensNoTemplate",
+      "options": {
+        "jsx": "preserve"
+      },
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/jsxTextOpensNoTemplate.errors.txt",
+      "claims": [
+        {
+          "name": "okOpenerInText",
+          "kind": "ok",
+          "fromLine": 10,
+          "toLine": 10
+        },
+        {
+          "name": "badAfterElement",
+          "kind": "bad",
+          "fromLine": 11,
+          "toLine": 11
+        },
+        {
+          "name": "badLaterFunction",
+          "kind": "bad",
+          "fromLine": 12,
+          "toLine": 13
+        }
+      ]
+    },
+    {
+      "case": "parser/jsxTypeArgumentsAreTypeScript.tsx",
+      "area": "parser",
+      "name": "jsxTypeArgumentsAreTypeScript",
+      "options": {
+        "jsx": "preserve"
+      },
+      "accepted": false,
+      "codes": [
+        1010,
+        1109,
+        1125,
+        2695
+      ],
+      "baseline": "baselines/jsxTypeArgumentsAreTypeScript.errors.txt",
+      "claims": [
+        {
+          "name": "badTypeArgumentHex",
+          "kind": "bad",
+          "fromLine": 15,
+          "toLine": 15
+        },
+        {
+          "name": "okTypeArgumentText",
+          "kind": "ok",
+          "fromLine": 16,
+          "toLine": 16
+        },
+        {
+          "name": "badPayloadInFailedParens",
+          "kind": "bad",
+          "fromLine": 17,
+          "toLine": 17
+        },
+        {
+          "name": "badPayloadInFailedForHead",
+          "kind": "bad",
+          "fromLine": 18,
+          "toLine": 18
+        },
+        {
+          "name": "badCommentAfterElement",
+          "kind": "bad",
+          "fromLine": 19,
+          "toLine": 19
         }
       ]
     },
@@ -8707,7 +9019,19 @@
           "name": "okClassSubtype",
           "kind": "ok",
           "fromLine": 34,
-          "toLine": 35
+          "toLine": 37
+        },
+        {
+          "name": "okOptionalMethod",
+          "kind": "ok",
+          "fromLine": 39,
+          "toLine": 39
+        },
+        {
+          "name": "badAbstractMethod",
+          "kind": "bad",
+          "fromLine": 41,
+          "toLine": 42
         }
       ]
     },
@@ -9822,6 +10146,76 @@
       ]
     },
     {
+      "case": "types/deleteOperandAdmitsUndefined.ts",
+      "area": "types",
+      "name": "deleteOperandAdmitsUndefined",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2790
+      ],
+      "baseline": "baselines/deleteOperandAdmitsUndefined.errors.txt",
+      "claims": [
+        {
+          "name": "okNullableAlias",
+          "kind": "ok",
+          "fromLine": 19,
+          "toLine": 19
+        },
+        {
+          "name": "okMaybeAlias",
+          "kind": "ok",
+          "fromLine": 20,
+          "toLine": 20
+        },
+        {
+          "name": "badOnlyNullAlias",
+          "kind": "bad",
+          "fromLine": 21,
+          "toLine": 21
+        },
+        {
+          "name": "badVoidAlias",
+          "kind": "bad",
+          "fromLine": 22,
+          "toLine": 22
+        },
+        {
+          "name": "badVoidUnion",
+          "kind": "bad",
+          "fromLine": 23,
+          "toLine": 23
+        },
+        {
+          "name": "okUnknown",
+          "kind": "ok",
+          "fromLine": 24,
+          "toLine": 24
+        },
+        {
+          "name": "okAny",
+          "kind": "ok",
+          "fromLine": 25,
+          "toLine": 26
+        },
+        {
+          "name": "OkNullableField",
+          "kind": "ok",
+          "fromLine": 27,
+          "toLine": 30
+        },
+        {
+          "name": "BadNullField",
+          "kind": "bad",
+          "fromLine": 31,
+          "toLine": 35
+        }
+      ]
+    },
+    {
       "case": "types/intersectionMemberFromEveryConstituent.ts",
       "area": "types",
       "name": "intersectionMemberFromEveryConstituent",
@@ -9944,14 +10338,26 @@
         {
           "name": "okUse",
           "kind": "ok",
-          "fromLine": 12,
-          "toLine": 12
+          "fromLine": 13,
+          "toLine": 13
         },
         {
           "name": "badUse",
           "kind": "bad",
-          "fromLine": 13,
-          "toLine": 14
+          "fromLine": 14,
+          "toLine": 15
+        },
+        {
+          "name": "okSetHas",
+          "kind": "ok",
+          "fromLine": 20,
+          "toLine": 20
+        },
+        {
+          "name": "badSetHas",
+          "kind": "bad",
+          "fromLine": 21,
+          "toLine": 22
         }
       ]
     },

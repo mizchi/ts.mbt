@@ -15,7 +15,6 @@ declare global {
 declare const ok: boolean;
 
 export const okNumbersInText = <p>width 0.08em, 08 px, 017, 0x</p>;
-export const okBacktickInText = <p>cost `x</p>;
 export const okSymbolInText = <p>a ¬ b</p>;
 export const okMultilineClass = <div
   className="
@@ -24,3 +23,5 @@ export const okMultilineClass = <div
   "
 />;
 export const okNestedText = <p>{ok && <b>w 0.08em</b>}</p>;
+// Last on purpose: see `jsxTextOpensNoTemplate`.
+export const okBacktickInText = <p>cost `x</p>;

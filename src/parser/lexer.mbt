@@ -526,7 +526,10 @@ fn Lexer::skip_whitespace(self : Lexer) -> Unit {
                 None => {
                   // TS1010: end of file inside a block comment.
                   self.unterminated_block_comment = true
-                  self.note_diag("`*/` expected")
+                  // At the `/*`, not at the preceding token: an element
+                  // forgives the lexer diagnostics in its range, and
+                  // `<p /> /*` would otherwise put this one inside it.
+                  self.diag_positions.push((comment_start, "`*/` expected"))
                   break
                 }
                 Some('*') =>
