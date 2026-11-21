@@ -4512,7 +4512,7 @@ fn Resolver::unwrap_containers(
     _ => return self.unwrap(ty)
   }
   let aborted = [false]
-  let out = self.unwrap_containers_at(ty, 0, [], aborted)
+  let out = self.unwrap_containers_at(ty, 0, [], aborted, Map([]))
   if aborted[0] {
     // Fall back to the plain outer-layer unwrap — exactly what every
     // caller used before container expansion existed.
@@ -4523,16 +4523,42 @@ fn Resolver::unwrap_containers(
 }
 
 ///|
+///
+/// Each alias is expanded once per depth, and a union's members are
+/// flattened and deduplicated. Expanding an alias on every path that
+/// reached it, into a nested copy per path, made eight levels of ten
+/// aliases that each name the whole level below 10^8 expansions, and every
+/// consumer then walked the same 10^8 nodes (#332's review). `memo` holds
+/// a completed expansion by alias name and depth. Whether one aborts is a
+/// fact about the name and the depth alone: a repeat found along one path
+/// is a cycle through the alias, which any other path into it meets too.
+/// Once anything aborts, the result is discarded, so nothing more is
+/// walked.
 fn Resolver::unwrap_containers_at(
   self : Resolver,
   ty : @ast.TsType,
   depth : Int32,
   seen : Array[String],
   aborted : Array[Bool],
+  memo : Map[String, @ast.TsType],
 ) -> @ast.TsType {
+  if aborted[0] {
+    return ty
+  }
   if depth >= 8 {
     aborted[0] = true
     return ty
+  }
+  let memo_key = match ty {
+    Named(n) => {
+      let key = n + "\u{0}" + depth.to_string()
+      match memo.get(key) {
+        Some(done) => return done
+        None => ()
+      }
+      Some(key)
+    }
+    _ => None
   }
   // Names peeled along this path. A repeat means the alias is
   // recursive, so the expansion can't finish.
@@ -4552,13 +4578,15 @@ fn Resolver::unwrap_containers_at(
     _ => seen
   }
   let unwrapped = self.unwrap(ty)
-  match unwrapped {
-    Array(inner) => Array(self.unwrap_element(inner, depth + 1, path, aborted))
-    Rest(inner) => Rest(self.unwrap_element(inner, depth + 1, path, aborted))
+  let result : @ast.TsType = match unwrapped {
+    Array(inner) =>
+      Array(self.unwrap_element(inner, depth + 1, path, aborted, memo))
+    Rest(inner) =>
+      Rest(self.unwrap_element(inner, depth + 1, path, aborted, memo))
     Tuple(items) => {
       let out : Array[@ast.TsType] = []
       for it in items {
-        out.push(self.unwrap_element(it, depth + 1, path, aborted))
+        out.push(self.unwrap_element(it, depth + 1, path, aborted, memo))
       }
       Tuple(out)
     }
@@ -4566,22 +4594,45 @@ fn Resolver::unwrap_containers_at(
     // resolver-free comparison as one inside an array:
     // `type Ext = Base & { to: string }` never matched an object literal
     // carrying both halves' fields, because `Base` stayed a name.
+    // A member that expands to a union contributes its members: a union
+    // of unions is the same union, and nesting kept one copy per path.
     Union(parts) => {
       let out : Array[@ast.TsType] = []
       for p in parts {
-        out.push(self.unwrap_element(p, depth + 1, path, aborted))
+        match self.unwrap_element(p, depth + 1, path, aborted, memo) {
+          Union(inner) =>
+            for m in inner {
+              if !out.contains(m) {
+                out.push(m)
+              }
+            }
+          m => if !out.contains(m) { out.push(m) }
+        }
       }
-      Union(out)
+      // Members that were all the same type are that type. A one-member
+      // union is a shape no rule expects: univer's `isRow ? { …4 fields } :
+      // { …4 fields }` collapsed to one and then missed the object arm of
+      // the structural relation.
+      if out.length() == 1 {
+        out[0]
+      } else {
+        Union(out)
+      }
     }
     Intersection(parts) => {
       let out : Array[@ast.TsType] = []
       for p in parts {
-        out.push(self.unwrap_element(p, depth + 1, path, aborted))
+        out.push(self.unwrap_element(p, depth + 1, path, aborted, memo))
       }
       Intersection(out)
     }
     other => other
   }
+  match memo_key {
+    Some(key) => if !aborted[0] { memo[key] = result }
+    None => ()
+  }
+  result
 }
 
 ///|
@@ -4603,8 +4654,9 @@ fn Resolver::unwrap_element(
   depth : Int32,
   seen : Array[String],
   aborted : Array[Bool],
+  memo : Map[String, @ast.TsType],
 ) -> @ast.TsType {
-  let unwrapped = self.unwrap_containers_at(ty, depth, seen, aborted)
+  let unwrapped = self.unwrap_containers_at(ty, depth, seen, aborted, memo)
   match unwrapped {
     Named(n) =>
       match self.interfaces.get(n) {
@@ -11011,9 +11063,14 @@ fn nominal_private_blocks(
   // when ANY member is: `async ? new AsyncFn() : new Fn()` against a base
   // class both extend is legal, and reading the union as "not a class"
   // blocked it outright. A nullish member is left to the null checks.
+  //
+  // A SOURCE member that is an alias to a union is flattened into its
+  // leaves first, each alias once: "any member" means the same over the
+  // leaves, and recursing member by member re-walked an alias once per
+  // path that reached it (#332's review).
   match resolver.unwrap(source) {
     Union(members) =>
-      return members
+      return flatten_union_alias_leaves(resolver, members)
         .iter()
         .any(fn(m) {
           !(resolver.unwrap(m) is (Null | Undefined)) &&
@@ -23917,7 +23974,19 @@ fn type_deeply_contains_unmodeled(
 
   match resolver.unwrap(ty) {
     Array(inner) | Rest(inner) => recur_(inner)
-    Union(parts) | Intersection(parts) | Tuple(parts) => {
+    // A union member that is an alias to a union is flattened into its
+    // leaves first, each alias once, as `nominal_private_blocks` does: such
+    // an alias is not itself an unmodeled shape, and walking it member by
+    // member re-walked it once per path (#332's review).
+    Union(parts) => {
+      for p in flatten_union_alias_leaves(resolver, parts) {
+        if recur_(p) {
+          return true
+        }
+      }
+      false
+    }
+    Intersection(parts) | Tuple(parts) => {
       for p in parts {
         if recur_(p) {
           return true
@@ -26003,7 +26072,12 @@ fn structural_oneway_assignable_rec(
     _ => ()
   }
   match resolver.unwrap(target) {
-    Union(members) => {
+    Union(nested) => {
+      // A member that is an alias to a union is flattened into its leaves
+      // first, each alias once: "some member" means the same over the
+      // leaves, and descending one alias level at a time re-walked a
+      // shared alias once per path (#332's review).
+      let members = flatten_union_alias_leaves(resolver, nested)
       // A member is tried with the plain relation too: the recursion's own
       // base case is the NAMED comparison, which says nothing about a
       // primitive, so `"你好"` against `string | string[] | ILanguagePack`
@@ -29017,6 +29091,61 @@ fn collect_declared_fields_of_unwrapped(
 }
 
 ///|
+/// The leaves of a union whose members may be aliases to unions, in order,
+/// each distinct leaf once. Each alias is opened once however many members
+/// name it, which is what keeps a union of aliases that share their members
+/// linear rather than one walk per path. A member that does not open to a
+/// union is a leaf as written, so the caller unwraps it as before.
+fn flatten_union_alias_leaves(
+  resolver : Resolver,
+  parts : Array[@ast.TsType],
+) -> Array[@ast.TsType] {
+  let out : Array[@ast.TsType] = []
+  let opened_names : Map[String, Unit] = Map([])
+  let opened_other : Array[@ast.TsType] = []
+  fn go(
+    resolver : Resolver,
+    ps : Array[@ast.TsType],
+    out : Array[@ast.TsType],
+    opened_names : Map[String, Unit],
+    opened_other : Array[@ast.TsType],
+  ) -> Unit {
+    for p in ps {
+      match p {
+        Union(inner) => go(resolver, inner, out, opened_names, opened_other)
+        _ =>
+          match resolver.unwrap(p) {
+            Union(inner) => {
+              let fresh = match p {
+                Named(n) =>
+                  if opened_names.contains(n) {
+                    false
+                  } else {
+                    opened_names[n] = ()
+                    true
+                  }
+                _ =>
+                  if opened_other.contains(p) {
+                    false
+                  } else {
+                    opened_other.push(p)
+                    true
+                  }
+              }
+              if fresh {
+                go(resolver, inner, out, opened_names, opened_other)
+              }
+            }
+            _ => if !out.contains(p) { out.push(p) }
+          }
+      }
+    }
+  }
+  go(resolver, parts, out, opened_names, opened_other)
+  out
+}
+
+///|
 fn collect_declared_fields_at(
   target : @ast.TsType,
   resolver : Resolver,
@@ -29273,10 +29402,18 @@ fn collect_declared_fields_unwrapped_at(
     // union of two params interfaces, which is not deduplicated) kept only
     // `IRange`'s own members and `{ ...range }` lost the inherited
     // `startRow` (univer's permission checks, on main too).
-    Union(parts) =>
-      if parts.length() == 0 {
+    //
+    // A member that is itself an alias to a union is flattened first, each
+    // alias once: the fields common to every member of a nested union are
+    // the fields common to its leaves, and walking it level by level
+    // re-walked an alias once per path that reached it, so eight levels of
+    // ten aliases that each name the whole level below never finished
+    // (#332's review).
+    Union(nested) =>
+      if nested.length() == 0 {
         ()
       } else {
+        let parts = flatten_union_alias_leaves(resolver, nested)
         let first_fields = collect_declared_fields_at(
           parts[0],
           resolver,
@@ -35525,25 +35662,72 @@ fn narrow_by_truthy_discriminant(
 /// (`Signature.Algorithm`, …) of unions of interfaces, and `"_tag" in
 /// algorithm` has to see the interfaces to keep the ones that declare
 /// `_tag`. A member that does not unwrap to a union is kept as written.
+///
+/// Each alias is expanded once per depth it is first reached at or above.
+/// The walk used to re-expand an alias on every path that reached it, so
+/// eight levels of ten aliases that each name the whole level below were
+/// 10^8 expansions before the callers deduplicated (#332's review). An
+/// alias already expanded at a depth no greater than this one contributed
+/// every member this visit would, so the visit is skipped; one first
+/// reached deeper, where the depth bound cut it short, is expanded again.
 fn deep_union_members(resolver : Resolver, ty : @ast.TsType) -> @ast.TsType {
   let parts = match ty {
     Union(ps) => ps
     _ => return ty
   }
   let out : Array[@ast.TsType] = []
+  let named_at : Map[String, Int32] = Map([])
+  let other_at : Array[(@ast.TsType, Int32)] = []
+  // Whether `p` was already expanded at `depth` or shallower; records it
+  // otherwise.
+  fn seen(
+    named_at : Map[String, Int32],
+    other_at : Array[(@ast.TsType, Int32)],
+    p : @ast.TsType,
+    depth : Int32,
+  ) -> Bool {
+    match p {
+      Named(n) =>
+        match named_at.get(n) {
+          Some(d) if d <= depth => true
+          _ => {
+            named_at[n] = depth
+            false
+          }
+        }
+      _ => {
+        for i, e in other_at {
+          if e.0 == p {
+            if e.1 <= depth {
+              return true
+            }
+            other_at[i] = (p, depth)
+            return false
+          }
+        }
+        other_at.push((p, depth))
+        false
+      }
+    }
+  }
   fn go(
     resolver : Resolver,
     ps : Array[@ast.TsType],
     depth : Int32,
     out : Array[@ast.TsType],
+    named_at : Map[String, Int32],
+    other_at : Array[(@ast.TsType, Int32)],
   ) -> Unit {
     for p in ps {
       match p {
-        Union(inner) => go(resolver, inner, depth, out)
+        Union(inner) => go(resolver, inner, depth, out, named_at, other_at)
         _ =>
           if depth < 8 {
             match resolver.unwrap(p) {
-              Union(inner) => go(resolver, inner, depth + 1, out)
+              Union(inner) =>
+                if !seen(named_at, other_at, p, depth) {
+                  go(resolver, inner, depth + 1, out, named_at, other_at)
+                }
               _ => out.push(p)
             }
           } else {
@@ -35552,7 +35736,7 @@ fn deep_union_members(resolver : Resolver, ty : @ast.TsType) -> @ast.TsType {
       }
     }
   }
-  go(resolver, parts, 0, out)
+  go(resolver, parts, 0, out, named_at, other_at)
   union_of(out)
 }
 

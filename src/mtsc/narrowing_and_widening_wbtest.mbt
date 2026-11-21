@@ -117,7 +117,9 @@ test "a nullable alias inside a union loses its nullish members" {
     #|  step(state.pending);
     #|}
   assert_eq(issue_lines(src), [
-    "function badUnguarded > call `step` arg[0]: type `TB | void | TB | null | undefined | void` is not assignable to type `TB`",
+    // The repeated members were printed twice before #332's review, when
+    // the container walk nested one copy of an alias per path.
+    "function badUnguarded > call `step` arg[0]: type `TB | void | null | undefined` is not assignable to type `TB`",
   ])
 }
 
@@ -4480,5 +4482,34 @@ test "a declaration's object literal narrows a declared union (declobjlit)" {
   assert_eq(issue_lines(src), [
     "function badMember > binding `n` init: expected `number` but got `string`",
     "function badBlank > PropAccess `.value`: property `value` does not exist on `{ type: \"blank\" (string) }`",
+  ])
+}
+
+///|
+/// `unwrap_containers` flattens and deduplicates a union's members (#332's
+/// review), and two identical object branches collapse to one. Returned as
+/// a one-member `Union`, that shape missed the object arm of the
+/// structural relation, so univer's `translateRange(isRow ? {…} : {…})`
+/// against `IRange extends IRowRange, IColumnRange` was reported. A union
+/// that deduplicates to one member is that member.
+test "identical object branches relate as one object (samebranches)" {
+  let src =
+    #|// @strict: true
+    #|interface IRowRange { startRow: number; endRow: number }
+    #|interface IColumnRange { startColumn: number; endColumn: number }
+    #|interface IRange extends IRowRange, IColumnRange { rangeType?: number }
+    #|declare function translateRange(range: IRange, dx: number, dy: number): IRange;
+    #|export function okSameBranches(isRow: boolean, a: number, b: number) {
+    #|  const range = isRow
+    #|    ? { startRow: a, endRow: b, startColumn: 0, endColumn: 1 }
+    #|    : { startRow: 0, endRow: 1, startColumn: a, endColumn: b };
+    #|  return translateRange(range, 1, 0);
+    #|}
+    #|export function badSameBranches(isRow: boolean, a: number) {
+    #|  const range = isRow ? { startRow: a, endRow: a } : { startRow: 0, endRow: 1 };
+    #|  return translateRange(range, 1, 0);
+    #|}
+  assert_eq(issue_lines(src), [
+    "function badSameBranches > call `translateRange` arg[0]: expected `IRange` but got `{ startRow: number; endRow: number }`",
   ])
 }

@@ -8450,6 +8450,55 @@ product surfaces now.
       optional. `TsInterface.fields` holds `(name, type)` and the parser
       stores `x?: T` as `T | undefined`, so telling the two apart needs an
       AST field the bridge also reads. It stays a declared MISS.
+  - **#332's second round: a stall on a 90-line file, in seven walks.** The
+    review named `Array.isArray`'s new expansion. Eight levels of ten
+    aliases, each naming the whole level below, are 10^8 paths, and the
+    walk re-expanded an alias on every path that reached it. Measured
+    rather than argued, it was one of seven walks with that shape, and the
+    smallest. gdb put every sample of the plain `!= null` file in
+    `reaches_alias`, the circular-alias check, which runs before any
+    narrowing and is as slow on main (1.8 s at depth 7, about 10x per
+    level). It remembered only the current PATH, which stops a cycle and
+    not a shared node. Each fix exposed the next: the member walk behind
+    `const n: string[] = v` (34 s at depth 8), then
+    `nominal_private_blocks` and `type_deeply_contains_unmodeled`, then,
+    for a union TARGET, `unwrap_containers` and the structural relation.
+    Each walk now enters an alias once:
+    - `reaches_alias` keeps every node it entered, and the alias bodies are
+      indexed once per module. A node's reachability does not depend on
+      the path, so every answer is unchanged.
+    - `deep_union_members` skips an alias already expanded at the same
+      depth or shallower, and expands one first reached deeper again,
+      where its depth bound had cut it short.
+    - `unwrap_containers` stops once anything aborts (the result is
+      discarded then), memoizes a completed expansion by alias name and
+      depth, and flattens and deduplicates a union's members. Whether an
+      expansion aborts depends on the name and the depth alone, since a
+      repeat found along one path is a cycle any other path meets too.
+    - The other four flatten a union whose members are alias unions first
+      (`flatten_union_alias_leaves`). "Fields common to every member",
+      "any member blocks" and "some member fits" mean the same over the
+      leaves.
+    The dedupe produced one regression, caught by the univer gate rather
+    than a test: two identical object branches (`isRow ? {…} : {…}`)
+    collapsed to a ONE-member `Union`, a shape no rule expects, and missed
+    the object arm of the structural relation. A union that deduplicates to
+    one member is that member now. Two arms were written and reverted,
+    because removing them changed no measured shape: the structural
+    relation's source side and `nominal_private_blocks`' target side.
+    The guards went from seconds to 10 ms and the assignments from 34 s to
+    under 10 ms, at depth 10 as at 8. Each mechanism is mutation-proven by
+    the time it brings back (2-71 s). `verify-checker-scaling` gains an
+    `alias-dag` axis, two aliases per level, which the old walks cannot
+    finish. `deep_union_members`'s own cost is bounded by its depth limit,
+    so it is pinned by a unit test on its member count instead: the old
+    walk returned 487 members for a union of 7. What is left is filed
+    rather than chased, because it is the same shape in more places and
+    slower on main: member access on such a union (20 s on main, 3.8 s
+    here), an optional chain (over 30 s on both), and truthiness, `typeof`
+    and discriminant narrowing through `non_nullable_resolved`. The fix
+    that ends the family is one flattened, memoized view of an alias union
+    in the resolver, so that no walk sees the DAG at all.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

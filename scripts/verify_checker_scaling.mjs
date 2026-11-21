@@ -82,6 +82,11 @@ const AXIS_RUNGS = {
   // Depths too: one call nested in another's argument.
   "nested-overload-calls": [50, 100, 200, 400],
   "nested-generic-overload-calls": [50, 100, 200, 400],
+  // Also a depth: two aliases per level, each naming both of the level
+  // below. Linear work is a few hundred nodes at the top rung, so the
+  // ladder reads near-flat, while a walk that re-enters a shared alias
+  // once per path is 2^depth and is killed at the second rung.
+  "alias-dag": [12, 24, 48, 96],
 };
 
 // Per-axis exponent budget. Every axis is held to `--max-exponent` (1.5)
@@ -328,6 +333,25 @@ const AXES = {
       "declare const empty: [];\n" +
       `export const r = ${call};\n`
     );
+  },
+  // Type aliases as a DAG N levels deep, two per level, each naming
+  // both aliases of the level below: `type L3_0 = L2_0 | L2_1`. A walk
+  // that remembers only the current PATH re-enters a shared alias once
+  // per path that reaches it, so the circular-alias check
+  // (#332's review), and so was the member walk behind the assignment at
+  // the end (`collect_declared_fields`). The narrowing there reads the
+  // same DAG through `deep_union_members`, whose own re-expansion is
+  // bounded by its depth limit and is pinned by a unit test instead.
+  "alias-dag": (n) => {
+    const out = ["interface I0 { a: number }", "interface I1 { b: string }"];
+    out.push("type L0_0 = I0 | null;", "type L0_1 = I1 | null;");
+    for (let l = 1; l < n; l++) {
+      for (let i = 0; i < 2; i++) out.push(`type L${l}_${i} = L${l - 1}_0 | L${l - 1}_1;`);
+    }
+    out.push(
+      `export function f(v: L${n - 1}_0 | string[]) { if (v != null) { const w = v; } const s: string[] = v; }`,
+    );
+    return out.join("\n") + "\n";
   },
   // THE CONTROL. Byte count grows with the rung and the declaration
   // count does not (12 interfaces throughout), so this axis stays flat
