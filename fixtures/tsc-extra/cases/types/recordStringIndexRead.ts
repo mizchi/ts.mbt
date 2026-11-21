@@ -4,10 +4,11 @@
 // `Record<string, V>` is a string index signature of `V`, so reading it
 // with a `string`-typed key gives `V`, as the dotted read and the
 // `{ [k: string]: V }` spelling do. A `number` key reads a string signature
-// too, and a `PropertyKey` key covers both. Typing the read needs TS 4.7's
-// element-access narrowing alongside it: with a key that is a parameter or
-// a `const` nobody reassigns, `obj[key]` is narrowed like a property, so a
-// guarded read of an `unknown` value is legal.
+// too, and a `PropertyKey` key covers both. Typing the read needs TS 5.5's
+// control-flow narrowing of constant indexed accesses alongside it: with a
+// key that is a parameter or a `const` nobody reassigns, `obj[key]` is
+// narrowed like a property, so a guarded read of an `unknown` value is
+// legal (TS 4.7 narrowed only literal and unique-symbol keys).
 
 enum Lang { A = "a", UNKNOWN = "unknown" }
 const M: Record<string, Lang> = { a: Lang.A };

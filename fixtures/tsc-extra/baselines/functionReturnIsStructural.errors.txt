@@ -2,9 +2,11 @@ functionReturnIsStructural.ts(17,14): error TS2322: Type '() => { a: string; }' 
   Type '{ a: string; }' is not assignable to type 'A'.
     Types of property 'a' are incompatible.
       Type 'string' is not assignable to type 'number'.
+functionReturnIsStructural.ts(32,14): error TS2322: Type '() => Source' is not assignable to type '() => Target'.
+  Property 'required' is missing in type 'Source' but required in type 'Target'.
 
 
-==== functionReturnIsStructural.ts (1 errors) ====
+==== functionReturnIsStructural.ts (2 errors) ====
     // A function type's return is compared structurally: `() => { a: number }`
     // is a `() => A` for `interface A { a: number }`. A mutable `Map` or `Set`
     // is its readonly view, there and anywhere else.
@@ -35,4 +37,17 @@ functionReturnIsStructural.ts(17,14): error TS2322: Type '() => { a: string; }' 
       const occurrences = new Map<string, number>();
       return makeHooks(() => ({ occurrences }), (w: string) => { occurrences.set(w, 1); });
     }
+    
+    // A class target's methods count: a source class without `required()` is
+    // not a `Target`, and one with every member and more is a `Source`.
+    class Source { tag = 1; }
+    class Target { tag = 1; required(): number { return 1; } }
+    declare const gs: () => Source;
+    export const badClassMethod: () => Target = gs;
+                 ~~~~~~~~~~~~~~
+!!! error TS2322: Type '() => Source' is not assignable to type '() => Target'.
+!!! error TS2322:   Property 'required' is missing in type 'Source' but required in type 'Target'.
+!!! related TS2728 functionReturnIsStructural.ts:30:25: 'required' is declared here.
+    declare const gt: () => Target;
+    export const okClassSubtype: () => Source = gt;
     

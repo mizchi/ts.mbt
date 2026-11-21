@@ -152,6 +152,12 @@ pub struct Parser {
   // not tell. Shared by every `{ ..self }` copy, so a speculative parser
   // that consumes a JSX element forgives them for all of them.
   jsx_unterminated_strings : Array[Int32]
+  // The lexer's other diagnostics with their positions, kept only in JSX
+  // mode and shared the same way: a numeric literal, a backtick or an
+  // escape in JSX text or a multi-line attribute value was lexed as
+  // JavaScript (`<p>width 0.08em</p>`), so `parse_module` reports only the
+  // ones no JSX element forgave.
+  jsx_lexer_diags : Array[(Int32, String)]
   // The lines a `@ts-ignore` / `@ts-expect-error` comment directive
   // suppresses (sorted, see `ts_directive_target_lines`), the line-start
   // offsets they are measured against, and the statements found to start
@@ -563,6 +569,7 @@ pub fn Parser::new_with_strict_and_jsx(
     grammar_misuses: [],
     option_header: "",
     jsx_unterminated_strings: [],
+    jsx_lexer_diags: [],
     ts_directive_lines: [],
     line_starts: [],
     suppressed_stmts: [],
@@ -691,11 +698,15 @@ pub fn Parser::from_source_with_jsx(
   let head = option_header + source_head(src)
   let head_lower = head.to_lower()
   let grammar_misuses : Array[String] = []
-  if lexer.invalid_char_count > 0 {
-    grammar_misuses.push("invalid character in source")
-  }
-  if lexer.unterminated_template {
-    grammar_misuses.push("unterminated template literal")
+  // In JSX mode these wait for the parse, like TS1002 below: see
+  // `jsx_lexer_diags`.
+  if !allow_jsx {
+    if lexer.invalid_char_count > 0 {
+      grammar_misuses.push("invalid character in source")
+    }
+    if lexer.unterminated_template {
+      grammar_misuses.push("unterminated template literal")
+    }
   }
   // Marker, not an error: the file declares a `const` type parameter
   // somewhere (`<const T>` / `<A, const B>`). The checker widens a fresh
@@ -713,11 +724,13 @@ pub fn Parser::from_source_with_jsx(
       break
     }
   }
-  if lexer.unterminated_block_comment {
-    grammar_misuses.push("`*/` expected")
-  }
-  if lexer.unterminated_regex {
-    grammar_misuses.push("unterminated regular expression literal")
+  if !allow_jsx {
+    if lexer.unterminated_block_comment {
+      grammar_misuses.push("`*/` expected")
+    }
+    if lexer.unterminated_regex {
+      grammar_misuses.push("unterminated regular expression literal")
+    }
   }
   // In JSX mode the verdict waits for the parse: a quote inside a JSX
   // element may open a multi-line attribute value the lexer could not
@@ -726,14 +739,16 @@ pub fn Parser::from_source_with_jsx(
   if lexer.unterminated_string && !allow_jsx {
     grammar_misuses.push("unterminated string literal")
   }
-  for _i in 0..<lexer.empty_radix_literal_count {
-    grammar_misuses.push("hexadecimal digit expected")
-  }
-  for _i in 0..<lexer.escaped_keyword_count {
-    grammar_misuses.push("keywords cannot contain escape characters")
-  }
-  for _i in 0..<lexer.unbalanced_regex_group_count {
-    grammar_misuses.push("`)` expected in a regular expression literal")
+  if !allow_jsx {
+    for _i in 0..<lexer.empty_radix_literal_count {
+      grammar_misuses.push("hexadecimal digit expected")
+    }
+    for _i in 0..<lexer.escaped_keyword_count {
+      grammar_misuses.push("keywords cannot contain escape characters")
+    }
+    for _i in 0..<lexer.unbalanced_regex_group_count {
+      grammar_misuses.push("`)` expected in a regular expression literal")
+    }
   }
   // Whole-source directive markers, collected in one pass (each used to
   // be its own full-source scan — two of them via lowered copies).
@@ -766,22 +781,24 @@ pub fn Parser::from_source_with_jsx(
   if noimplicitthis_off {
     grammar_misuses.push("<noimplicitthis-off>")
   }
-  for _i in 0..<lexer.invalid_radix_digit_count {
-    grammar_misuses.push("invalid digit in a binary or octal numeric literal")
-  }
-  for _i in 0..<lexer.invalid_unicode_escape_count {
-    grammar_misuses.push("hexadecimal digit expected in a unicode escape")
-  }
-  for _i in 0..<lexer.unicode_escape_overflow_count {
-    grammar_misuses.push(
-      "an extended unicode escape value must be between 0x0 and 0x10FFFF inclusive",
-    )
-  }
-  for _i in 0..<lexer.legacy_octal_literal_count {
-    grammar_misuses.push("octal literals are not allowed")
-  }
-  for _i in 0..<lexer.leading_zero_decimal_count {
-    grammar_misuses.push("decimals with leading zeros are not allowed")
+  if !allow_jsx {
+    for _i in 0..<lexer.invalid_radix_digit_count {
+      grammar_misuses.push("invalid digit in a binary or octal numeric literal")
+    }
+    for _i in 0..<lexer.invalid_unicode_escape_count {
+      grammar_misuses.push("hexadecimal digit expected in a unicode escape")
+    }
+    for _i in 0..<lexer.unicode_escape_overflow_count {
+      grammar_misuses.push(
+        "an extended unicode escape value must be between 0x0 and 0x10FFFF inclusive",
+      )
+    }
+    for _i in 0..<lexer.legacy_octal_literal_count {
+      grammar_misuses.push("octal literals are not allowed")
+    }
+    for _i in 0..<lexer.leading_zero_decimal_count {
+      grammar_misuses.push("decimals with leading zeros are not allowed")
+    }
   }
   // Module-scoped flag marker for the override checks (TS4114 fires only
   // under `@noImplicitOverride: true`); TS4112/TS4113 are unconditional.
@@ -958,6 +975,11 @@ pub fn Parser::from_source_with_jsx(
     bracket_close: [],
     jsx_unterminated_strings: if allow_jsx {
       lexer.unterminated_string_starts
+    } else {
+      []
+    },
+    jsx_lexer_diags: if allow_jsx {
+      lexer.diag_positions
     } else {
       []
     },
@@ -2061,4 +2083,34 @@ fn Parser::record_doc(self : Parser, key : String, pos : Int32) -> Unit {
     }
     None => ()
   }
+}
+
+///|
+/// A grammar message the lexer raises (see `Lexer::note_diag`), other than
+/// TS1002.
+fn is_lexer_diag_message(m : String) -> Bool {
+  m
+  is ("invalid character in source"
+  | "unterminated template literal"
+  | "`*/` expected"
+  | "unterminated regular expression literal"
+  | "hexadecimal digit expected"
+  | "keywords cannot contain escape characters"
+  | "`)` expected in a regular expression literal"
+  | "invalid digit in a binary or octal numeric literal"
+  | "hexadecimal digit expected in a unicode escape"
+  | "an extended unicode escape value must be between 0x0 and 0x10FFFF inclusive"
+  | "octal literals are not allowed"
+  | "decimals with leading zeros are not allowed")
+}
+
+///|
+/// The lexer diagnostics reported once per file however often they occur,
+/// as the non-JSX path reports them.
+fn is_once_per_file_lexer_diag(m : String) -> Bool {
+  m
+  is ("invalid character in source"
+  | "unterminated template literal"
+  | "`*/` expected"
+  | "unterminated regular expression literal")
 }

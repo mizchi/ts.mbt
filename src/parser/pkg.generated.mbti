@@ -152,6 +152,8 @@ pub struct Lexer {
   mut unterminated_regex : Bool
   mut unterminated_string : Bool
   unterminated_string_starts : Array[Int32]
+  diag_positions : Array[(Int32, String)]
+  mut token_start : Int32
   mut empty_radix_literal_count : Int32
   mut escaped_keyword_count : Int32
   mut unbalanced_regex_group_count : Int32
@@ -217,6 +219,7 @@ pub struct Parser {
   grammar_misuses : Array[String]
   option_header : String
   jsx_unterminated_strings : Array[Int32]
+  jsx_lexer_diags : Array[(Int32, String)]
   ts_directive_lines : Array[Int32]
   line_starts : Array[Int32]
   suppressed_stmts : Array[@ast.TsStmt]

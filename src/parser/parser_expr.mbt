@@ -1584,6 +1584,7 @@ fn Parser::parse_parenthesized_expr(
     // Same tokens, same source positions: a JSX element parsed in here
     // forgives the lexer's unterminated strings for the whole file.
     jsx_unterminated_strings: self.jsx_unterminated_strings,
+    jsx_lexer_diags: self.jsx_lexer_diags,
   }
   // The same source, so the same source-level flags: a checking parse
   // keeps `as const`, and `([1, 2] as const)` must keep it too.
@@ -1670,6 +1671,7 @@ fn Parser::parse_expr_until_top_level(
     // Same tokens, same source positions: a JSX element parsed in here
     // forgives the lexer's unterminated strings for the whole file.
     jsx_unterminated_strings: self.jsx_unterminated_strings,
+    jsx_lexer_diags: self.jsx_lexer_diags,
   }
   // The same source, so the same source-level flags: a checking parse
   // keeps `as const`, and `([1, 2] as const)` must keep it too.
@@ -2239,9 +2241,11 @@ fn Parser::is_source_word_apostrophe(self : Parser, idx : Int32) -> Bool {
 fn Parser::skip_source_line_comment(self : Parser, idx : Int32) -> Int32 {
   let mut i = idx + 2
   while i < self.src.length() {
-    let c = self.src[i].to_int().unsafe_to_char()
+    let c = self.src[i]
     i += 1
-    if c == '\n' || c == '\r' {
+    // LS and PS end a line comment as LF and CR do, as the lexer reads
+    // them: `{ // note` + LS + `f("x") }` is a payload holding a call.
+    if is_line_break_unit(c) {
       break
     }
   }
@@ -2377,13 +2381,48 @@ fn Parser::parse_jsx_embed(
         sub.grammar_misuses.contains("unterminated string literal") {
         self.grammar_misuses.push("unterminated string literal")
       }
+      // The lexer's other diagnostics the same way: the enclosing element
+      // forgave its own lexer's copies, so the payload's `{0b2}` is
+      // reported from here.
+      self.surface_payload_lexer_diags(sub, read)
       // A statement inside the payload (an arrow's block body) that a
       // directive in the payload covers. The sub-parser decided that over
       // its own line table, which is the only one that fits its positions.
       self.adopt_suppressed_stmts(sub)
       e
     }
-    Err(e) => raise e
+    Err(e) => {
+      // A payload this parser cannot read still had its tokens before the
+      // failure read as JavaScript: `{[0b2]}` stops at the `2` the lexer
+      // split off, after the `0b` it reported. The enclosing element
+      // forgave its own lexer's copies, so without this they vanished.
+      // TS1002 keeps its success-only rule above, since an unterminated
+      // string swallows what follows and its stop point is no evidence.
+      let stop = sub.peek()
+      self.surface_payload_lexer_diags(sub, fn(p) { p < stop.pos })
+      raise e
+    }
+  }
+}
+
+///|
+/// Reports the lexer diagnostics of a payload's sub-parser that its parse
+/// READ (`read` on the diagnostic's token position), and the ones its own
+/// payloads reported into its grammar list.
+fn Parser::surface_payload_lexer_diags(
+  self : Parser,
+  sub : Parser,
+  read : (Int32) -> Bool,
+) -> Unit {
+  for d in sub.jsx_lexer_diags {
+    if read(d.0) {
+      self.grammar_misuses.push(d.1)
+    }
+  }
+  for m in sub.grammar_misuses {
+    if is_lexer_diag_message(m) {
+      self.grammar_misuses.push(m)
+    }
   }
 }
 
@@ -2409,6 +2448,16 @@ fn Parser::forgive_jsx_string_artifacts(
   start : Int32,
   end : Int32,
 ) -> Unit {
+  let diags = self.jsx_lexer_diags
+  if diags.length() > 0 {
+    let kept = diags.filter(fn(d) { d.0 < start || d.0 >= end })
+    if kept.length() != diags.length() {
+      diags.clear()
+      for d in kept {
+        diags.push(d)
+      }
+    }
+  }
   let pending = self.jsx_unterminated_strings
   if pending.length() == 0 {
     return

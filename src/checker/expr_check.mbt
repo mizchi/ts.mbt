@@ -5943,18 +5943,22 @@ fn inferred_primitive_field_type(
           // it exposed relations this checker does not have yet, a `switch`
           // over an alias built from `Extract` and `Partial` (excalidraw's
           // `transform.ts`) and a rest-tuple callback parameter (univer's
-          // `fromCallback<[number]>`), so a top-level one stays `any`.
+          // `fromCallback<[number]>`), so a top-level one stays `any`. A
+          // name the module binds as a value (`const Map = CustomMap`) is
+          // not the lib's either.
           match cls.instance_field_inits[i].1 {
             TypeArgs(targs, New("Map" | "WeakMap" as n, _)) if targs.length() ==
               2 &&
               resolver.classes.get(n) is None &&
               resolver.interfaces.get(n) is None &&
+              resolver.declared_value_names.get(n) is None &&
               targs.iter().all(is_checkable) =>
               return Some(@ast.TsType::Applied(n, targs))
             TypeArgs(targs, New("Set" | "WeakSet" as n, _)) if targs.length() ==
               1 &&
               resolver.classes.get(n) is None &&
               resolver.interfaces.get(n) is None &&
+              resolver.declared_value_names.get(n) is None &&
               targs.iter().all(is_checkable) =>
               return Some(@ast.TsType::Applied(n, targs))
             _ => ()
@@ -23273,7 +23277,14 @@ fn assignable_through_class_chain(
       sr is Any ||
       is_assignable_to(sr, tr) ||
       chain_relates_names(sr, tr, resolver) ||
-      struct_field_assignable(sr, tr, resolver, [])
+      // The structural walk reads a CLASS target's properties and not its
+      // methods, so `() => Source` passed for `() => Target` when `Target`
+      // adds a `required()` method. Each instance method the target class
+      // or a base declares must also be one the source has.
+      (
+        struct_field_assignable(sr, tr, resolver, []) &&
+        class_target_methods_present(resolver, sr, tr)
+      )
     }
     // Same-shape primitive / `null` / `undefined` matches so a union
     // walk like `Foo | null → Object | null` succeeds (the class chain
@@ -65552,4 +65563,47 @@ fn type_has_string_member(t : @ast.TsType) -> Bool {
   union_components(flatten_union_parts(t))
   .iter()
   .any(fn(m) { m is (String_ | Literal(_) | TemplateLiteralType(_, _)) })
+}
+
+///|
+/// Whether `src` has every instance method that the class `tgt` names, or one
+/// of its base classes declares. A target that is not a class has nothing to
+/// add, and a source whose members are not all known abstains (true), since
+/// an absent name there may just be one this checker does not see. A computed
+/// method name is skipped for the same reason.
+fn class_target_methods_present(
+  resolver : Resolver,
+  src : @ast.TsType,
+  tgt : @ast.TsType,
+) -> Bool {
+  guard resolver.unwrap(tgt) is (Named(n) | Applied(n, _)) &&
+    resolver.classes.get(n) is Some(cls) else {
+    return true
+  }
+  if !resolver.enumerable_object_shape(src, 0) {
+    return true
+  }
+  let seen : Map[String, Unit] = Map([])
+  let stack = [cls]
+  while stack.pop() is Some(c) {
+    if seen.contains(c.name) {
+      continue
+    }
+    seen[c.name] = ()
+    for m in c.methods {
+      if m.is_static || m.name.has_prefix("@@") || m.name.has_prefix("<") {
+        continue
+      }
+      if resolver.lookup_field(src, m.name) is None {
+        return false
+      }
+    }
+    for b in c.base_names {
+      match resolver.classes.get(b) {
+        Some(bc) => stack.push(bc)
+        None => ()
+      }
+    }
+  }
+  true
 }

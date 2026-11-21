@@ -5886,6 +5886,60 @@
       ]
     },
     {
+      "case": "inference/tupleRestCallbackParameters.ts",
+      "area": "inference",
+      "name": "tupleRestCallbackParameters",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322,
+        2345,
+        7006
+      ],
+      "baseline": "baselines/tupleRestCallbackParameters.errors.txt",
+      "claims": [
+        {
+          "name": "okTupleTwo",
+          "kind": "ok",
+          "fromLine": 7,
+          "toLine": 7
+        },
+        {
+          "name": "badTupleThree",
+          "kind": "bad",
+          "fromLine": 8,
+          "toLine": 8
+        },
+        {
+          "name": "badTupleElement",
+          "kind": "bad",
+          "fromLine": 9,
+          "toLine": 10
+        },
+        {
+          "name": "okGenericTwo",
+          "kind": "ok",
+          "fromLine": 12,
+          "toLine": 12
+        },
+        {
+          "name": "badGenericThree",
+          "kind": "bad",
+          "fromLine": 13,
+          "toLine": 13
+        },
+        {
+          "name": "badGenericElement",
+          "kind": "bad",
+          "fromLine": 14,
+          "toLine": 15
+        }
+      ]
+    },
+    {
       "case": "inference/unannotatedReturnThroughSwitchAndModuleConsts.ts",
       "area": "inference",
       "name": "unannotatedReturnThroughSwitchAndModuleConsts",
@@ -6509,6 +6563,142 @@
       "codes": [],
       "baseline": null,
       "claims": []
+    },
+    {
+      "case": "parser/jsxPayloadIsJavaScript.tsx",
+      "area": "parser",
+      "name": "jsxPayloadIsJavaScript",
+      "options": {
+        "jsx": "preserve"
+      },
+      "accepted": false,
+      "codes": [
+        1125,
+        1128,
+        1161,
+        1178
+      ],
+      "baseline": "baselines/jsxPayloadIsJavaScript.errors.txt",
+      "claims": [
+        {
+          "name": "ok",
+          "kind": "ok",
+          "fromLine": 11,
+          "toLine": 12
+        },
+        {
+          "name": "badChildHex",
+          "kind": "bad",
+          "fromLine": 13,
+          "toLine": 13
+        },
+        {
+          "name": "badAttributeOctal",
+          "kind": "bad",
+          "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "badNestedHex",
+          "kind": "bad",
+          "fromLine": 15,
+          "toLine": 15
+        },
+        {
+          "name": "okText",
+          "kind": "ok",
+          "fromLine": 16,
+          "toLine": 17
+        }
+      ]
+    },
+    {
+      "case": "parser/jsxPayloadLineCommentTerminators.tsx",
+      "area": "parser",
+      "name": "jsxPayloadLineCommentTerminators",
+      "options": {
+        "jsx": "preserve"
+      },
+      "accepted": false,
+      "codes": [
+        2345
+      ],
+      "baseline": "baselines/jsxPayloadLineCommentTerminators.errors.txt",
+      "claims": [
+        {
+          "name": "badAfterLs",
+          "kind": "bad",
+          "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "badAfterPs",
+          "kind": "bad",
+          "fromLine": 15,
+          "toLine": 15
+        },
+        {
+          "name": "badAfterLf",
+          "kind": "bad",
+          "fromLine": 16,
+          "toLine": 19
+        },
+        {
+          "name": "okAfterLs",
+          "kind": "ok",
+          "fromLine": 20,
+          "toLine": 21
+        }
+      ]
+    },
+    {
+      "case": "parser/jsxTextIsNotJavaScript.tsx",
+      "area": "parser",
+      "name": "jsxTextIsNotJavaScript",
+      "options": {
+        "jsx": "preserve"
+      },
+      "accepted": true,
+      "codes": [],
+      "baseline": null,
+      "claims": [
+        {
+          "name": "ok",
+          "kind": "ok",
+          "fromLine": 13,
+          "toLine": 14
+        },
+        {
+          "name": "okNumbersInText",
+          "kind": "ok",
+          "fromLine": 15,
+          "toLine": 15
+        },
+        {
+          "name": "okBacktickInText",
+          "kind": "ok",
+          "fromLine": 16,
+          "toLine": 16
+        },
+        {
+          "name": "okSymbolInText",
+          "kind": "ok",
+          "fromLine": 17,
+          "toLine": 17
+        },
+        {
+          "name": "okMultilineClass",
+          "kind": "ok",
+          "fromLine": 18,
+          "toLine": 22
+        },
+        {
+          "name": "okNestedText",
+          "kind": "ok",
+          "fromLine": 24,
+          "toLine": 25
+        }
+      ]
     },
     {
       "case": "parser/lowercaseInstantiationExpressionArgument.ts",
@@ -8505,7 +8695,19 @@
           "name": "okHooks",
           "kind": "ok",
           "fromLine": 22,
-          "toLine": 26
+          "toLine": 28
+        },
+        {
+          "name": "badClassMethod",
+          "kind": "bad",
+          "fromLine": 32,
+          "toLine": 32
+        },
+        {
+          "name": "okClassSubtype",
+          "kind": "ok",
+          "fromLine": 34,
+          "toLine": 35
         }
       ]
     },
@@ -8552,6 +8754,82 @@
           "kind": "bad",
           "fromLine": 17,
           "toLine": 18
+        }
+      ]
+    },
+    {
+      "case": "relations/libGenericTypeArguments.ts",
+      "area": "relations",
+      "name": "libGenericTypeArguments",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/libGenericTypeArguments.errors.txt",
+      "claims": [
+        {
+          "name": "okSet",
+          "kind": "ok",
+          "fromLine": 11,
+          "toLine": 11
+        },
+        {
+          "name": "okMap",
+          "kind": "ok",
+          "fromLine": 12,
+          "toLine": 12
+        },
+        {
+          "name": "okArray",
+          "kind": "ok",
+          "fromLine": 13,
+          "toLine": 13
+        },
+        {
+          "name": "okPromise",
+          "kind": "ok",
+          "fromLine": 14,
+          "toLine": 15
+        },
+        {
+          "name": "badSet",
+          "kind": "bad",
+          "fromLine": 16,
+          "toLine": 16
+        },
+        {
+          "name": "badReadonlySet",
+          "kind": "bad",
+          "fromLine": 17,
+          "toLine": 17
+        },
+        {
+          "name": "badMap",
+          "kind": "bad",
+          "fromLine": 18,
+          "toLine": 18
+        },
+        {
+          "name": "badReadonlyMap",
+          "kind": "bad",
+          "fromLine": 19,
+          "toLine": 19
+        },
+        {
+          "name": "badArray",
+          "kind": "bad",
+          "fromLine": 20,
+          "toLine": 20
+        },
+        {
+          "name": "badPromise",
+          "kind": "bad",
+          "fromLine": 21,
+          "toLine": 22
         }
       ]
     },
@@ -9215,7 +9493,19 @@
           "name": "badRestElem",
           "kind": "bad",
           "fromLine": 22,
-          "toLine": 23
+          "toLine": 25
+        },
+        {
+          "name": "okCtorBothRest",
+          "kind": "ok",
+          "fromLine": 27,
+          "toLine": 27
+        },
+        {
+          "name": "badCtorBothRest",
+          "kind": "bad",
+          "fromLine": 29,
+          "toLine": 30
         }
       ]
     },
@@ -9638,6 +9928,34 @@
       ]
     },
     {
+      "case": "types/newCollectionShadowedByValue.ts",
+      "area": "types",
+      "name": "newCollectionShadowedByValue",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/newCollectionShadowedByValue.errors.txt",
+      "claims": [
+        {
+          "name": "okUse",
+          "kind": "ok",
+          "fromLine": 12,
+          "toLine": 12
+        },
+        {
+          "name": "badUse",
+          "kind": "bad",
+          "fromLine": 13,
+          "toLine": 14
+        }
+      ]
+    },
+    {
       "case": "types/newCollectionWithTypeArgs.ts",
       "area": "types",
       "name": "newCollectionWithTypeArgs",
@@ -9859,74 +10177,74 @@
         {
           "name": "okRead",
           "kind": "ok",
-          "fromLine": 16,
-          "toLine": 16
-        },
-        {
-          "name": "badRead",
-          "kind": "bad",
           "fromLine": 17,
           "toLine": 17
         },
         {
-          "name": "okNumberKey",
-          "kind": "ok",
+          "name": "badRead",
+          "kind": "bad",
           "fromLine": 18,
           "toLine": 18
         },
         {
+          "name": "okNumberKey",
+          "kind": "ok",
+          "fromLine": 19,
+          "toLine": 19
+        },
+        {
           "name": "badPropertyKey",
           "kind": "bad",
-          "fromLine": 19,
-          "toLine": 20
+          "fromLine": 20,
+          "toLine": 21
         },
         {
           "name": "badAlias",
           "kind": "bad",
-          "fromLine": 22,
-          "toLine": 25
+          "fromLine": 23,
+          "toLine": 26
         },
         {
           "name": "okNarrowedByTypeof",
           "kind": "ok",
-          "fromLine": 26,
-          "toLine": 34
+          "fromLine": 27,
+          "toLine": 35
         },
         {
           "name": "okNarrowedByCoalesce",
           "kind": "ok",
-          "fromLine": 35,
-          "toLine": 41
+          "fromLine": 36,
+          "toLine": 42
         },
         {
           "name": "okCoalesceLiteral",
           "kind": "ok",
-          "fromLine": 42,
-          "toLine": 46
+          "fromLine": 43,
+          "toLine": 47
         },
         {
           "name": "okRecordLiteral",
           "kind": "ok",
-          "fromLine": 49,
-          "toLine": 53
+          "fromLine": 50,
+          "toLine": 54
         },
         {
           "name": "okRecordObject",
           "kind": "ok",
-          "fromLine": 54,
-          "toLine": 60
+          "fromLine": 55,
+          "toLine": 61
         },
         {
           "name": "badAnyCoalesce",
           "kind": "bad",
-          "fromLine": 62,
-          "toLine": 66
+          "fromLine": 63,
+          "toLine": 67
         },
         {
           "name": "badCoalesceNullable",
           "kind": "bad",
-          "fromLine": 67,
-          "toLine": 72
+          "fromLine": 68,
+          "toLine": 73
         }
       ]
     },

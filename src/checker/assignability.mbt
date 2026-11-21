@@ -236,7 +236,19 @@ fn func_params_assignable(
     match rest_elem {
       Some(elem) =>
         for i in s_fixed..<t_len {
-          if !variance_ok(elem, t_params[i]) {
+          // A target's own trailing rest is compared by its element: two
+          // rest parameters relate element to element (`new (...a:
+          // number[]) => U` is a `new (...a: number[]) => U`), where the
+          // wrapped slot against the bare element compared nothing.
+          let t_i = match t_params[i] {
+            Rest(_) as r if i == t_len - 1 =>
+              match rest_element_type(r) {
+                Some(e) => e
+                None => r
+              }
+            other => other
+          }
+          if !variance_ok(elem, t_i) {
             return false
           }
         }

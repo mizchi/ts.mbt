@@ -1,0 +1,52 @@
+tupleRestCallbackParameters.ts(8,37): error TS2345: Argument of type '(a: any, b: any, c: any) => void' is not assignable to parameter of type '(xs_0: string, xs_1: number) => void'.
+  Target signature provides too few arguments. Expected 3 or more, but got 2.
+tupleRestCallbackParameters.ts(8,38): error TS7006: Parameter 'a' implicitly has an 'any' type.
+tupleRestCallbackParameters.ts(8,41): error TS7006: Parameter 'b' implicitly has an 'any' type.
+tupleRestCallbackParameters.ts(8,44): error TS7006: Parameter 'c' implicitly has an 'any' type.
+tupleRestCallbackParameters.ts(9,57): error TS2322: Type 'number' is not assignable to type 'string'.
+tupleRestCallbackParameters.ts(13,39): error TS2345: Argument of type '(a: any, b: any, c: any) => void' is not assignable to parameter of type '(xs_0: any, xs_1: number) => void'.
+  Target signature provides too few arguments. Expected 3 or more, but got 2.
+tupleRestCallbackParameters.ts(13,40): error TS7006: Parameter 'a' implicitly has an 'any' type.
+tupleRestCallbackParameters.ts(13,43): error TS7006: Parameter 'b' implicitly has an 'any' type.
+tupleRestCallbackParameters.ts(13,46): error TS7006: Parameter 'c' implicitly has an 'any' type.
+tupleRestCallbackParameters.ts(14,59): error TS2322: Type 'number' is not assignable to type 'string'.
+
+
+==== tupleRestCallbackParameters.ts (10 errors) ====
+    // A callback parameter typed by a TUPLE rest takes one parameter per
+    // element: `(...xs: [string, number]) => void` gives a callback a `string`
+    // and a `number`, and refuses one that requires a third. The same holds
+    // when an element is a type parameter the call leaves unsolved.
+    
+    declare function f(cb: (...xs: [string, number]) => void): void;
+    export function okTupleTwo() { f((a, b) => {}); }
+    export function badTupleThree() { f((a, b, c) => {}); }
+                                        ~~~~~~~~~~~~~~~
+!!! error TS2345: Argument of type '(a: any, b: any, c: any) => void' is not assignable to parameter of type '(xs_0: string, xs_1: number) => void'.
+!!! error TS2345:   Target signature provides too few arguments. Expected 3 or more, but got 2.
+                                         ~
+!!! error TS7006: Parameter 'a' implicitly has an 'any' type.
+                                            ~
+!!! error TS7006: Parameter 'b' implicitly has an 'any' type.
+                                               ~
+!!! error TS7006: Parameter 'c' implicitly has an 'any' type.
+    export function badTupleElement() { f((a, b) => { const s: string = b; }); }
+                                                            ~
+!!! error TS2322: Type 'number' is not assignable to type 'string'.
+    
+    declare function g<T>(cb: (...xs: [T, number]) => void): void;
+    export function okGenericTwo() { g((a, b) => {}); }
+    export function badGenericThree() { g((a, b, c) => {}); }
+                                          ~~~~~~~~~~~~~~~
+!!! error TS2345: Argument of type '(a: any, b: any, c: any) => void' is not assignable to parameter of type '(xs_0: any, xs_1: number) => void'.
+!!! error TS2345:   Target signature provides too few arguments. Expected 3 or more, but got 2.
+                                           ~
+!!! error TS7006: Parameter 'a' implicitly has an 'any' type.
+                                              ~
+!!! error TS7006: Parameter 'b' implicitly has an 'any' type.
+                                                 ~
+!!! error TS7006: Parameter 'c' implicitly has an 'any' type.
+    export function badGenericElement() { g((a, b) => { const s: string = b; }); }
+                                                              ~
+!!! error TS2322: Type 'number' is not assignable to type 'string'.
+    
