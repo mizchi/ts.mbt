@@ -3978,3 +3978,269 @@ test "a pattern declaration shadows an outer binding's declared type (patternsha
     "function badStillChecked > assign `k`: expected `number` but got `string`",
   ])
 }
+
+///|
+test "an array keeps literals that are not fresh (arraydeclaredliterals)" {
+  let src =
+    #|// @strict: true
+    #|declare function getSep(i: number): '-' | '/' | null;
+    #|declare const o: { kind: 'a' | 'b' };
+    #|enum E { A, B }
+    #|declare function id<T>(x: T): T;
+    #|function take(s: '-' | '/'): string { return s; }
+    #|declare const xs: number[];
+    #|export function okMapped() {
+    #|  const seps = xs.map((x) => getSep(x));
+    #|  const sep = seps[0];
+    #|  if (sep) take(sep);
+    #|}
+    #|export function okLiteral() {
+    #|  const seps = [getSep(1)];
+    #|  const sep = seps[0];
+    #|  if (sep) take(sep);
+    #|}
+    #|export function okFreshWidens() {
+    #|  const a = ["-"]; a.push("z");
+    #|  const b = [E.A]; b.push(E.B);
+    #|  const c = xs.map(() => "-"); c.push("z");
+    #|  const d = [id("x")]; d.push("y");
+    #|  const e = xs.map(() => { const k = "a"; return k; }); e.push("z");
+    #|}
+    #|export function badDeclaredKept() {
+    #|  const f = [o.kind]; f.push("c");
+    #|  const g = xs.map((x): "a" => "a"); g.push("z");
+    #|}
+  assert_eq(issue_lines(src), [
+    "function badDeclaredKept > call `push` arg[0]: expected `\"a\" (string) | \"b\" (string)` but got `\"c\" (string)`",
+    "function badDeclaredKept > call `push` arg[0]: expected `\"a\" (string)` but got `string`",
+  ])
+}
+
+///|
+test "a map callback's object literal widens member by member (mapobjectwiden)" {
+  let src =
+    #|// @strict: true
+    #|interface C { start: number; require: 'a-or-b' | 'a-and-b' }
+    #|declare const ranges: { s: number }[];
+    #|export function okAsConst(): C[] {
+    #|  return ranges.map((r) => {
+    #|    const start = r.s + 1;
+    #|    return { start, require: 'a-or-b' as const };
+    #|  });
+    #|}
+    #|export function okBound(): C[] {
+    #|  const cs = ranges.map((r) => {
+    #|    const start = r.s + 1;
+    #|    return { start, require: 'a-or-b' as const };
+    #|  });
+    #|  return cs;
+    #|}
+    #|export function badFresh(): C[] {
+    #|  const cs = ranges.map((r) => ({ start: r.s, require: 'a-or-b' }));
+    #|  return cs;
+    #|}
+  assert_eq(issue_lines(src), [
+    "function badFresh > return: expected `C[]` but got `{ start: number; require: string }[]`",
+  ])
+}
+
+///|
+test "an index inside an optional chain sees its receiver non-nullish (chainindex)" {
+  let src =
+    #|// @strict: true
+    #|declare const stack: string[] | null;
+    #|declare const p: { a: number[] } | undefined;
+    #|export const ok1 = stack?.[stack?.length - 1];
+    #|export const ok2 = stack?.[stack.length - 1];
+    #|export const ok3 = p?.a[p.a.length - 1];
+    #|export const bad = stack?.length - 1;
+  assert_eq(issue_lines(src), [
+    "top-level > binary op: left operand `number | undefined` is not a valid number type",
+  ])
+}
+
+///|
+test "a numeric literal comparison rules out nullish (numericequality)" {
+  let src =
+    #|// @strict: true
+    #|declare const cols: { [k: number]: { w?: number } | undefined };
+    #|function takeN(n: number): number { return n; }
+    #|export function ok(c: number, dflt: number) {
+    #|  let result = cols[c]?.w;
+    #|  if (!result && result !== 0) {
+    #|    result = dflt;
+    #|  }
+    #|  return takeN(result);
+    #|}
+    #|export function okEqual(r: number | undefined) {
+    #|  if (r === 0) return takeN(r);
+    #|  if (r == -1) return takeN(r);
+    #|  return 0;
+    #|}
+    #|export function badNotEqual(r: number | undefined) {
+    #|  if (r !== 0) return takeN(r);
+    #|  return 0;
+    #|}
+  assert_eq(issue_lines(src), [
+    "function badNotEqual > call `takeN` arg[0]: type `number | undefined` is not assignable to type `number`",
+  ])
+}
+
+///|
+test "a class initializer narrows a declared union of classes (memberinit)" {
+  let src =
+    #|// @strict: true
+    #|class A { a = 1; isErr() { return false; } }
+    #|class B { b = 1; isErr() { return false; } }
+    #|type AB = A | B;
+    #|declare const arr: A;
+    #|declare const bv: B;
+    #|declare const flag: boolean;
+    #|export function ok1(): A { let v: AB = flag ? (arr as A) : arr; if (v.isErr()) { return v; } return v; }
+    #|export function ok2(): A { const v: AB = arr; return v; }
+    #|export function badReassigned(): A { let v: AB = arr; v = bv; return v; }
+    #|export function badOther(): A { let v: AB = bv; return v; }
+  assert_eq(issue_lines(src), [
+    "function badReassigned > return: expected `A` but got `B`", "function badOther > return: expected `A` but got `B`",
+  ])
+}
+
+///|
+test "a guard opens an alias of an alias (nestednullable)" {
+  let src =
+    #|// @strict: true
+    #|type Nullable<T> = T | null | undefined | void;
+    #|interface Cell { f?: string | null }
+    #|declare function isF(v: unknown): boolean;
+    #|export function okTruthy(x: Nullable<Nullable<Cell>> | undefined) { if (!x || isF(x.f)) { return; } }
+    #|export function okEarly(x: Nullable<Nullable<Cell>> | undefined) { if (!x) { return; } isF(x.f); }
+    #|export function badNullOnly(x: Nullable<Nullable<Cell>> | undefined) { if (x !== null) { return x.f; } }
+  assert_eq(issue_lines(src), [
+    "function badNullOnly > PropAccess `.f`: object is possibly `undefined`",
+  ])
+}
+
+///|
+test "a function type in a union is parenthesized (funcunionparens)" {
+  let src =
+    #|// @strict: true
+    #|declare function get(): (() => void) | undefined;
+    #|declare function use(f: () => void): void;
+    #|export function bad() { use(get()); }
+  assert_eq(issue_lines(src), [
+    "function bad > call `use` arg[0]: type `(() => void) | undefined` is not assignable to type `() => void`",
+  ])
+}
+
+///|
+test "a for head's own binding does not narrow an outer one (forheadjoin)" {
+  let src =
+    #|// @strict: true
+    #|declare const flag: boolean;
+    #|export function okShadowed() {
+    #|  let x: string = "outer";
+    #|  for (let x: string | number = ""; flag;) { x = 1; }
+    #|  const after: string = x;
+    #|  return after;
+    #|}
+    #|export function badOuterAssigned() {
+    #|  let y: string | number = "outer";
+    #|  for (let i = 0; flag; i++) { y = 1; }
+    #|  const after: string = y;
+    #|  return after;
+    #|}
+  assert_eq(issue_lines(src), [
+    "function badOuterAssigned > binding `after` init: expected `string` but got `\"outer\" (string) | 1`",
+  ])
+}
+
+///|
+test "a method with a declared this is not a plain getter (thisparamgetter)" {
+  let src =
+    #|// @strict: true
+    #|class K {
+    #|  value: number = 1;
+    #|  read(this: { value: string }) { return this.value; }
+    #|}
+    #|declare const k: K;
+    #|export const s: string = k.read();
+  assert_eq(issue_lines(src), [])
+}
+
+///|
+test "JSX type arguments skip quoted text (jsxtypeargquote)" {
+  let src =
+    #|declare function Box<T>(p: { children?: unknown }): any;
+    #|export const a = <Box<() => "<">>08 px</Box>;
+    #|export const b = <Box<'>' /* > */>>08 px</Box>;
+    #|export const bad: string = 1;
+  assert_eq(
+    check_source(src, true).split("\n").map(fn(l) { l.to_owned() }).collect(),
+    ["top-level > binding `bad` init: expected `string` but got `number`"],
+  )
+}
+
+///|
+test "a lib alias with no body abstains as a union member too (libaliasunion)" {
+  let src =
+    #|// @strict: true
+    #|declare function u1(k: CanvasFontKerning): void;
+    #|declare function u2(k?: CanvasFontKerning): void;
+    #|declare function u3(k: CanvasTextAlign | null): void;
+    #|enum E { A, B }
+    #|declare function u4(e: E | undefined): void;
+    #|export function ok() { u1('normal'); u2('normal'); u3('left'); }
+    #|export function badEnum() { u4("x"); }
+  assert_eq(issue_lines(src), [
+    "function badEnum > call `u4` arg[0]: expected `E | undefined` but got `string`",
+  ])
+}
+
+///|
+test "an `||` whose right operand is never nullish narrows the assignment (orfallback)" {
+  let src =
+    #|// @strict: true
+    #|class Viewport { x = 1; }
+    #|class Scene {
+    #|  private _all: Viewport[] = [];
+    #|  private _main = new Viewport();
+    #|  find(n: number) { return this._all.find((v) => v.x === n); }
+    #|  getDefault() { return this._main; }
+    #|  use(v: Viewport) { return v.x; }
+    #|  okOrFallback(n: number, vp?: Viewport) { if (!vp) { vp = this.find(n) || this.getDefault(); } return this.use(vp); }
+    #|  okOrNew(n: number, vp?: Viewport) { if (!vp) { vp = this.find(n) || new Viewport(); } return this.use(vp); }
+    #|  badOrMaybe(n: number, vp?: Viewport) { if (!vp) { vp = this.find(n) || this.find(n + 1); } return this.use(vp); }
+    #|}
+  assert_eq(issue_lines(src), [
+    "function Scene.badOrMaybe > call `use` arg[0]: type `Viewport | undefined` is not assignable to type `Viewport`",
+  ])
+}
+
+///|
+test "an optional-chain comparison removes void from the receiver (chainvoid)" {
+  let src =
+    #|// @strict: true
+    #|type Nullable<T> = T | null | undefined | void;
+    #|interface Cell { v?: number | null }
+    #|declare function use(c: Cell): void;
+    #|export function okEarlyReturn(c: Nullable<Cell>) { if (c?.v === undefined || c?.v === null) return; use(c); }
+    #|export function okNotUndefined(c: Nullable<Cell>) { if (c?.v !== undefined) use(c); }
+    #|export function okLooseNull(c: Nullable<Cell>) { if (c?.v != null) use(c); }
+    #|export function okValue(c: Nullable<Cell>) { if (c?.v === 1) use(c); }
+    #|export function badNotNull(c: Nullable<Cell>) { if (c?.v !== null) use(c); }
+  assert_eq(issue_lines(src), [
+    "function badNotNull > call `use` arg[0]: type `Cell | null | undefined | void` is not assignable to type `Cell`",
+  ])
+}
+
+///|
+test "a lib class in a union target keeps its check (libclassunion)" {
+  let src =
+    #|// @strict: true
+    #|type DateArg<D extends Date> = D | number | string;
+    #|declare function addDays<D extends Date>(d: DateArg<D>, n: number): D;
+    #|export function bad() { return addDays(null, 1); }
+  assert_eq(issue_lines(src), [
+    "function bad > call `addDays` arg[0]: expected `DateArg<Date>` but got `null`",
+  ])
+}

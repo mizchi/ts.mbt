@@ -8192,7 +8192,10 @@ fn Resolver::plain_getter_method_return(
     m.is_async ||
     m.is_generator ||
     m.type_params.length() > 0 ||
-    cls.type_params.length() > 0 {
+    cls.type_params.length() > 0 ||
+    // A declared `this` parameter types `this` in the body, so `this.FIELD`
+    // is that type's member and not the class's (#329's review).
+    (m.params.length() > 0 && m.params[0].0 == "this") {
     return m.return_type
   }
   guard m.body is Some(b) &&
@@ -22545,6 +22548,33 @@ fn check_expr_against_shape(
         is_concrete_primitive_or_literal(inferred_u)) {
         return
       }
+    // The same name as a UNION member is as undecidable: a lib alias this
+    // checker has no body for (`CanvasFontKerning = "auto" | "none" |
+    // "normal"`) made `f('normal')` against `kerning?: CanvasFontKerning`
+    // "expected `CanvasFontKerning | undefined` but got `string`", while the
+    // bare `kerning: CanvasFontKerning` abstained (univer's glyph
+    // measurement; probed: tsc accepts both). Only a LIB name with no
+    // VALUE, which is what a lib type alias is: `Date` is a lib class whose
+    // check decides `addDays(null)` against date-fns's `DateArg<Date> =
+    // Date | number | string` (the mutation differential caught a version
+    // without this), and an enum member type (`Direction.LEFT`) and any
+    // other name this module spells keep their check too.
+    Union(parts) if parts
+      .iter()
+      .any(fn(p) {
+        match p {
+          Named(n) =>
+            is_lib_global_type(n) &&
+            !is_lib_global_value(n) &&
+            ctx.resolver.type_aliases.get(n) is None &&
+            ctx.resolver.interfaces.get(n) is None &&
+            ctx.resolver.classes.get(n) is None &&
+            ctx.resolver.enums.get(n) is None &&
+            !(is_curated_well_known_type_name(n) &&
+            is_concrete_primitive_or_literal(inferred_u))
+          _ => false
+        }
+      }) => return
     _ => ()
   }
   // Mirror the above on the *source* side: if the inferred type contains
@@ -24544,6 +24574,12 @@ fn binding_init_type(
     Object(_) => widen_object_literal_type(inferred, init, resolver, infer)
     Union(_) if init is ObjectLit(_) =>
       widen_object_literal_type(inferred, init, resolver, infer)
+    // An array whose elements cannot hold a FRESH literal keeps them:
+    // `const seps = xs.map((x) => getSep(x))` with `getSep(): '-' | '/' |
+    // null` is `('-' | '/' | null)[]` in tsc, and widening it to
+    // `(string | null)[]` made a later `if (sep) take(sep)` a mismatch.
+    Array(_) | Tuple(_) if !array_init_may_hold_fresh(init, infer, resolver, 0) =>
+      inferred
     // An array of object literals widens each member the way a single
     // literal does, and the element type no longer carries the expressions
     // that say which members were enum members. So a key that EVERY item
@@ -24561,6 +24597,13 @@ fn binding_init_type(
     // An expanded interface's members are declared, not fresh, so only the
     // literal widening that predates enum-literal members applies to it.
     Struct(_, _) => widen_literal_deep(inferred)
+    // `xs.map((x) => ({ … }))` widens each member the way the literal
+    // itself does, so a member asserted `as const` or read from a declared
+    // value keeps its type: univer's `{ …, require: 'paragraph-or-section'
+    // as const }` read `require: string` and was then not assignable to the
+    // interface it was returned as.
+    Array(Object(_) as elem) if map_callback_object_return(init) is Some(obj) =>
+      Array(widen_object_literal_type(elem, obj, resolver, infer))
     Array(_) | Tuple(_) => widen_fresh_deep_from(resolver, inferred, init)
     // An enum member's literal type widens to its ENUM in a mutable
     // binding: `let prev = LinkCharType.Other` is a `LinkCharType`, so a
@@ -25051,6 +25094,197 @@ fn value_may_hold_fresh_literal(
       value_may_hold_fresh_literal(inner, infer)
     _ => false
   }
+}
+
+///|
+/// Whether an ARRAY initializer's elements can hold a FRESH literal type,
+/// the only kind tsc widens in an element type. `[getSep(1)]` and
+/// `xs.map((x) => getSep(x))`, with `getSep` declared to return
+/// `'-' | '/' | null`, are `('-' | '/' | null)[]` in tsc, `const` or not,
+/// so a later `if (sep)` keeps the literals (univer's `getDatePattern`).
+/// `["-"]`, `[E.A]`, `[id("x")]` with an unconstrained generic `id`, and
+/// `xs.map(() => "-")` widen. An initializer this does not recognise as
+/// declared answers `true`, which keeps the old deep widening.
+fn array_init_may_hold_fresh(
+  e : @ast.TsExpr,
+  infer : (@ast.TsExpr) -> @ast.TsType,
+  resolver : Resolver,
+  depth : Int32,
+) -> Bool {
+  if depth > 8 {
+    return true
+  }
+  let elem = fn(x : @ast.TsExpr) {
+    array_elem_may_hold_fresh(x, infer, resolver, depth + 1)
+  }
+  match e {
+    ArrayLit(items) => items.iter().any(elem)
+    // The elements of `recv.m(…)` come from the receiver, from what a
+    // callback returns, or, for the methods that insert them, from the
+    // arguments themselves.
+    MethodCall(Var("Array"), "of" | "from", args) => args.iter().any(elem)
+    MethodCall(recv, meth, args) =>
+      array_init_may_hold_fresh(recv, infer, resolver, depth + 1) ||
+      args
+      .iter()
+      .any(fn(a) {
+        if a is (ArrowFunc(_, _, _, _) | FuncExpr(_)) {
+          callback_may_return_fresh(a, infer, resolver, depth + 1)
+        } else {
+          meth is ("concat" | "fill" | "with" | "toSpliced") && elem(a)
+        }
+      })
+    Var(_) => value_may_hold_fresh_literal(e, infer)
+    _ => elem(e)
+  }
+}
+
+///|
+/// The object literal an inline `map` callback returns, when that literal is
+/// the callback's only value: an expression body, or a block body whose one
+/// `return` sits at its top level. An annotated callback returns its
+/// annotation, which `array_init_may_hold_fresh` already keeps.
+fn map_callback_object_return(init : @ast.TsExpr) -> @ast.TsExpr? {
+  let cb = match init {
+    MethodCall(_, "map", [cb]) | MethodCall(_, "map", [cb, _]) => cb
+    _ => return None
+  }
+  let block = match cb {
+    ArrowFunc(_, ret, _, _) if is_checkable(ret) => return None
+    ArrowFunc(_, _, ArrowExpr(ObjectLit(_) as obj), _) => return Some(obj)
+    ArrowFunc(_, _, ArrowBlock(b), _) => b
+    FuncExpr(f) if !is_checkable(f.return_type) => f.body
+    _ => return None
+  }
+  if block_has_nested_return(block) {
+    return None
+  }
+  let returns = block.stmts.filter(fn(st) { st is Return(_) })
+  match returns {
+    [Return(Some(ObjectLit(_) as obj))] => Some(obj)
+    _ => None
+  }
+}
+
+///|
+/// `array_init_may_hold_fresh` for one element of an array literal (or one
+/// value a callback returns). A call to a non-generic function DECLARATION
+/// holds its declared return, since an unannotated one is inferred with its
+/// literals already widened (`infer_body_return_type`). Every other call
+/// answers `true`: a generic callee's binding is a widening literal
+/// (`let v = id("x"); v = "y"` is legal), and an arrow `const`'s return is
+/// inferred from its body.
+fn array_elem_may_hold_fresh(
+  e : @ast.TsExpr,
+  infer : (@ast.TsExpr) -> @ast.TsType,
+  resolver : Resolver,
+  depth : Int32,
+) -> Bool {
+  if depth > 8 {
+    return true
+  }
+  match e {
+    Spread(inner) =>
+      array_init_may_hold_fresh(inner, infer, resolver, depth + 1)
+    ArrayLit(_) => array_init_may_hold_fresh(e, infer, resolver, depth + 1)
+    PropAccess(Var(n), _) if resolver.enums.contains(n) => true
+    PropAccess(_, _) | IndexAccess(_, _) => false
+    As(_, _) | Satisfies(_, _) => false
+    Var(_) => value_may_hold_fresh_literal(e, infer)
+    Call(f, _) => !declared_function_call(f, infer, resolver)
+    CallExpr(Var(f), _) => !declared_function_call(f, infer, resolver)
+    Cond(_, a, b) | BinOp(And | Or | Coalesce, a, b) =>
+      array_elem_may_hold_fresh(a, infer, resolver, depth + 1) ||
+      array_elem_may_hold_fresh(b, infer, resolver, depth + 1)
+    NonNull(inner) | PureCall(inner) =>
+      array_elem_may_hold_fresh(inner, infer, resolver, depth + 1)
+    _ => true
+  }
+}
+
+///|
+/// Whether `f` names a non-generic function declaration of this program, read
+/// from the scope that `infer` sees: the binding must still be the
+/// declaration (`globals`), so a local of the same name is not mistaken for
+/// it.
+fn declared_function_call(
+  f : String,
+  infer : (@ast.TsExpr) -> @ast.TsType,
+  resolver : Resolver,
+) -> Bool {
+  match (resolver.func_type_params.get(f), resolver.globals.get(f)) {
+    (Some(tps), Some(sig)) =>
+      tps.length() == 0 &&
+      sig is (Func(_, _) | Union(_)) &&
+      infer(@ast.TsExpr::Var(f)) == sig
+    _ => false
+  }
+}
+
+///|
+/// Whether an inline callback can return a FRESH literal: an annotated
+/// return cannot, and a body returns one when any `return` it reaches can.
+/// A name returned from a BLOCK body may be one of its own `const`s, which
+/// `infer` cannot see, so it answers `true`.
+fn callback_may_return_fresh(
+  cb : @ast.TsExpr,
+  infer : (@ast.TsExpr) -> @ast.TsType,
+  resolver : Resolver,
+  depth : Int32,
+) -> Bool {
+  let block = match cb {
+    ArrowFunc(_, ret, _, _) if is_checkable(ret) => return false
+    ArrowFunc(_, _, ArrowExpr(body), _) =>
+      return array_elem_may_hold_fresh(body, infer, resolver, depth + 1)
+    ArrowFunc(_, _, ArrowBlock(b), _) => b
+    FuncExpr(f) if is_checkable(f.return_type) => return false
+    FuncExpr(f) => f.body
+    _ => return true
+  }
+  block_may_return_fresh(block, infer, resolver, depth)
+}
+
+///|
+fn block_may_return_fresh(
+  b : @ast.TsBlock,
+  infer : (@ast.TsExpr) -> @ast.TsType,
+  resolver : Resolver,
+  depth : Int32,
+) -> Bool {
+  b.stmts
+  .iter()
+  .any(fn(st) {
+    let go = fn(inner : @ast.TsBlock) {
+      block_may_return_fresh(inner, infer, resolver, depth)
+    }
+    match st {
+      Return(Some(Var(_))) => true
+      Return(Some(v)) =>
+        array_elem_may_hold_fresh(v, infer, resolver, depth + 1)
+      Return(None) => false
+      If(_, t, e) => go(t) || (e is Some(eb) && go(eb))
+      Block(inner)
+      | While(_, inner)
+      | DoWhile(_, inner)
+      | With(_, inner)
+      | ForOf(_, _, _, _, inner)
+      | ForAwaitOf(_, _, _, _, inner)
+      | ForIn(_, _, _, _, inner)
+      | For(_, _, _, inner) => go(inner)
+      Try(t, _, c, f) =>
+        go(t) || (c is Some(cb) && go(cb)) || (f is Some(fb) && go(fb))
+      Switch(_, cases) => cases.iter().any(fn(c) { go(c.body) })
+      // A labelled statement is checked as the one-statement block it is.
+      Label(_, inner) =>
+        block_may_return_fresh(
+          { stmts: [inner], stmt_positions: [], },
+          infer,
+          resolver,
+          depth,
+        )
+      _ => false
+    }
+  })
 }
 
 ///|
@@ -32546,6 +32780,19 @@ fn strip_type_qualifiers(s : String) -> String {
 }
 
 ///|
+/// `type_display` for a union or intersection member: a function type is
+/// parenthesized, since its return type would otherwise absorb the rest.
+fn type_display_operand(ty : @ast.TsType) -> String {
+  match ty {
+    Func(_, _) | Constructor(_, _, _) | GenericFunc(_, _, _) =>
+      "(" + type_display(ty) + ")"
+    CallableMeta(Func(_, _) | Constructor(_, _, _) | GenericFunc(_, _, _), _) =>
+      "(" + type_display(ty) + ")"
+    _ => type_display(ty)
+  }
+}
+
+///|
 fn type_display(ty : @ast.TsType) -> String {
   match ty {
     TypePredicate(param, target) =>
@@ -32591,17 +32838,20 @@ fn type_display(ty : @ast.TsType) -> String {
       }
       module_local_display_name(n) + "<" + parts.join(", ") + ">"
     }
+    // A function type as a union or intersection member needs parentheses
+    // for the same reason: `(() => void) | undefined` printed as `() =>
+    // void | undefined`, a function returning `void | undefined`.
     Union(items) => {
       let parts : Array[String] = []
       for a in items {
-        parts.push(type_display(a))
+        parts.push(type_display_operand(a))
       }
       parts.join(" | ")
     }
     Intersection(items) => {
       let parts : Array[String] = []
       for a in items {
-        parts.push(type_display(a))
+        parts.push(type_display_operand(a))
       }
       parts.join(" & ")
     }
@@ -33936,6 +34186,58 @@ fn typeof_string_to_type(s : String) -> @ast.TsType? {
 }
 
 ///|
+/// The NOMINAL half of declared-type narrowing on initialization: an
+/// initializer whose type is one of a declared union's class or interface
+/// members narrows the binding to that member, as the assignment `x = init`
+/// does. univer's `let valueObject: FunctionVariantType = … ? (v as
+/// BaseValueObject) : array`, with `FunctionVariantType = BaseValueObject |
+/// BaseReferenceObject`, read the whole union at `return valueObject`
+/// against `BaseValueObject` (probed: tsc accepts it at `let` and `const`).
+///
+/// Only a member the initializer's type NAMES is kept, so nothing is
+/// decided by structure: a subclass, an object literal or an `any` keeps
+/// the declared union, which is the old answer.
+fn narrow_declared_member_by_init(
+  env : ExprEnv,
+  ctx : CheckCtx,
+  name : String,
+  declared : @ast.TsType,
+  init : @ast.TsExpr,
+) -> Unit {
+  if init is Var("__ts_no_init__") {
+    return
+  }
+  let members = match ctx.resolver.unwrap(declared) {
+    Union(_) as u =>
+      union_components(expand_union_alias_members(ctx.resolver, u))
+    _ => return
+  }
+  let nominal = fn(t : @ast.TsType) -> String? {
+    match t {
+      Named(n) | Applied(n, _) => Some(n)
+      _ => None
+    }
+  }
+  let parts = union_components(infer_expr(env, ctx.resolver, init))
+  let kept : Array[@ast.TsType] = []
+  for p in parts {
+    let n = match nominal(p) {
+      Some(n) => n
+      None => return
+    }
+    let found = members.iter().find_first(fn(m) { nominal(m) == Some(n) })
+    match found {
+      // An instantiated member must be the SAME instantiation.
+      Some(m) if m == p => if !kept.contains(m) { kept.push(m) }
+      _ => return
+    }
+  }
+  if kept.length() > 0 && kept.length() < members.length() {
+    env.narrow(name, union_of(kept))
+  }
+}
+
+///|
 /// The nullish half of declared-type narrowing on initialization: an
 /// initializer that cannot be nullish removes `undefined` / `null` / `void`
 /// from a declared union, exactly as the assignment `x = init` would. So
@@ -35121,11 +35423,15 @@ fn optional_chain_equality_narrowing(
       // `escaped?._tag === "Character"` narrows `escaped` to `Character`,
       // and pushing the bare non-nullish type after it overwrote that with
       // the whole union.
+      // `void` goes with `null` and `undefined`, as under `x!`: a receiver
+      // whose only value is `undefined` short-circuits too, so univer's
+      // `Nullable<T> = T | null | undefined | void` kept the `void` after
+      // `if (cellData?.v === undefined || cellData?.v === null) return`.
       Some(key) if !out.iter().any(fn(b) { b.0 == key }) =>
         out.push(
           (
             key,
-            non_nullable_resolved(
+            nullish_stripped(
               resolver,
               narrowing_current_type(env, resolver, key),
             ),
@@ -35299,17 +35605,34 @@ fn nullish_stripped(resolver : Resolver, l : @ast.TsType) -> @ast.TsType {
 /// `non_nullable` after resolving each part, so a member that is an
 /// indexed access or an alias carrying `undefined` inside it
 /// (`Cookie["options"]` of an optional field) loses it too.
+///
+/// A union member that resolves to a union is opened again, so an alias of
+/// an alias carrying `undefined` loses it at every level:
+/// `Nullable<Nullable<ICellData>> | undefined`, what univer's
+/// `matrix?.getValue(r, c)` returns, kept the inner `Nullable<ICellData>`
+/// after `if (!anchor) return` and every `anchor.f` was "possibly
+/// `undefined`".
 fn non_nullable_resolved(resolver : Resolver, ty : @ast.TsType) -> @ast.TsType {
   let out : Array[@ast.TsType] = []
-  for p in union_components(ty) {
-    match resolver.unwrap(p) {
+  fn open(t : @ast.TsType, depth : Int32, out : Array[@ast.TsType]) -> Unit {
+    match resolver.unwrap(t) {
+      Union(inner) if depth < 8 =>
+        for q in inner {
+          open(q, depth + 1, out)
+        }
       Union(inner) =>
         for q in inner {
           out.push(q)
         }
       Null | Undefined => out.push(Undefined)
-      _ => out.push(p)
+      // A member that does not resolve to a union keeps its own spelling,
+      // so an alias or an interface name is not replaced by its expansion.
+      _ => out.push(t)
     }
+  }
+
+  for p in union_components(ty) {
+    open(p, 0, out)
   }
   non_nullable(flatten_union_exact(out))
 }
@@ -37100,6 +37423,45 @@ fn analyze_equality(
       _ => false
     }
   }
+  // A NUMERIC or bigint literal on one side is the same fact: `r === 0`
+  // over `number | undefined` is `number` on the equal side, so the false
+  // branch of `!r && r !== 0` (truthy, or zero) is `number` too (univer's
+  // `Cell._getWidthResult`). Only the nullish members go; the literal arms
+  // above narrow string literals more precisely, and a numeric literal
+  // union keeps its members here, which is wider than tsc and never
+  // narrower.
+  for pair in [(left, right), (right, left)] {
+    let (subject, other) = pair
+    let numeric = match other {
+      NumberLit(_) | IntLit(_) | BigIntLit(_) => true
+      UnaryOp(Neg, NumberLit(_) | IntLit(_) | BigIntLit(_)) => true
+      _ => false
+    }
+    if numeric {
+      match narrowing_key_for_expr(subject) {
+        Some(key) => {
+          let cur0 = narrowing_current_type(env, resolver, key)
+          let flat = flatten_union_parts(
+            expand_union_alias_members(
+              resolver,
+              match resolver.unwrap(cur0) {
+                Union(_) as u => u
+                _ => cur0
+              },
+            ),
+          )
+          let nullish = fn(v : @ast.TsType) { v is (Null | Undefined | Void) }
+          if union_components(flat).iter().any(nullish) {
+            match narrow_remove(flat, nullish) {
+              Never => ()
+              kept => true_side.push((key, kept))
+            }
+          }
+        }
+        None => ()
+      }
+    }
+  }
   if !literal_like(left) && !literal_like(right) {
     for pair in [(left, right), (right, left)] {
       let (subject, other) = pair
@@ -38121,6 +38483,7 @@ fn check_ident_binding_decl(
     // with `type Op = null | OpList` (see `narrow_declared_nullish_by_init`).
     narrow_declared_nullish_by_init(env, ctx, name, declared, init)
   }
+  narrow_declared_member_by_init(env, ctx, name, declared, init)
   if !mutable_ && block_scoped {
     record_aliased_condition(env, ctx.resolver, name, init)
   }
@@ -39304,6 +39667,14 @@ fn narrow_after_assignment(
             syntactically_never_nullish(r) ||
             enum_member_receiver(env, ctx.resolver, r) is Some(_)
         }
+      // `a || b` is `b` whenever `a` is falsy, nullish included, so it is
+      // never nullish when `b` is not: univer's `viewPort =
+      // this.findViewportByPosToScene(pos) || this.getDefaultViewport()`,
+      // whose left call infers as `any` here, kept the declared `| undefined`
+      // (probed: tsc accepts the later `getViewportScrollXY(viewPort)`). A
+      // literal right operand is left out, since a falsy `""` or `0` is not
+      // nullish either but does not say which declared member the value is.
+      BinOp(Or, _, r) => syntactically_never_nullish(r)
       _ => false
     }
   }
@@ -40179,7 +40550,21 @@ fn check_stmt_unsuppressed(
       }
       check_block(env, body, ctx)
       env.restore_from(pre)
-      narrow_loop_exit_joins(env, joins)
+      // A `let` / `const` head declares a binding of its own, which the
+      // restore has already dropped; its join must not narrow an outer
+      // binding of the same name (`let x: string` beside `for (let x:
+      // string | number = ""; …) { x = 1 }`), as `loop_backedge_head_bindings`
+      // already keeps the head names out for `for…of` / `for…in`.
+      let head_names : Map[String, Unit] = Map([])
+      match init {
+        Some(s) =>
+          block_lexical_names({ stmts: [s], stmt_positions: [], }, head_names)
+        None => ()
+      }
+      narrow_loop_exit_joins(
+        env,
+        joins.filter(fn(wb) { !head_names.contains(wb.0) }),
+      )
     }
     ForOf(kind, binding, declared, iter, body) => {
       check_call_args_in_expr(env, iter, ctx)
@@ -41853,6 +42238,21 @@ fn generator_yield_any_walk_expr(expr : @ast.TsExpr, ctx : CheckCtx) -> Unit {
 }
 
 ///|
+/// Whether a member chain passes through a `?.` anywhere below its top —
+/// the cheap question `optional_chain_guarded_receivers` answers with a
+/// rebuilt chain, asked first so a plain `a[i][j]` allocates nothing.
+fn chain_passes_optional(expr : @ast.TsExpr) -> Bool {
+  match expr {
+    OptionalChain(_) => true
+    PropAccess(inner, _)
+    | IndexAccess(inner, _)
+    | CallExpr(inner, _)
+    | MethodCall(inner, _, _) => chain_passes_optional(inner)
+    _ => false
+  }
+}
+
+///|
 fn check_call_args_in_expr(
   env : ExprEnv,
   expr : @ast.TsExpr,
@@ -41871,7 +42271,38 @@ fn check_call_args_in_expr(
   // method by its first declaration (`h$?.pipe(op)` against rxjs's
   // `pipe(): Observable<T>`, where `h$!.pipe(op)` is silent). A guarded
   // receiver with no narrowing key (`f()?.m(…)`) keeps the optional walk.
+  //
+  // An INDEX evaluates only when its chain did not short-circuit either:
+  // `stack?.[stack?.length - 1]` and `p?.a[p.a.length - 1]` are legal, and
+  // univer's `rollback` read the first as `number | undefined` minus one.
+  // That access keeps its own (optional) walk, since its receiver rules are
+  // what the arms below check; only the receivers are narrowed around it.
   match expr {
+    OptionalChain(IndexAccess(_, _)) | IndexAccess(_, _) if chain_passes_optional(
+        expr,
+      ) => {
+      let (_, guarded) = optional_chain_guarded_receivers(expr)
+      if guarded.length() > 0 {
+        let snap = env.full_snapshot()
+        for g in guarded {
+          match narrowing_key_for_expr(g) {
+            Some(key) => {
+              let t = non_nullable_resolved(
+                ctx.resolver,
+                narrowing_current_type(env, ctx.resolver, key),
+              )
+              if !(t is Never) {
+                env.narrow(key, t)
+              }
+            }
+            None => ()
+          }
+        }
+        check_call_args_in_expr_at(env, expr, ctx)
+        env.restore_from(snap)
+        return
+      }
+    }
     CallExpr(_, _) | MethodCall(_, _, _) => {
       let (plain, guarded) = optional_chain_guarded_receivers(expr)
       let narrowed : Array[(String, @ast.TsType)] = []
