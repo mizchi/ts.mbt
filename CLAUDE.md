@@ -8362,6 +8362,24 @@ product surfaces now.
     (TS2684). It now uses a legal receiver whose field type is narrower
     than the declared `this` (`value: "a"` against `{ value: string }`),
     so the test fails if the return is taken from the field.
+  - **#331's review: two Majors, both real.**
+    - The mapped-alias distribution could recurse without bound. `type R =
+      M<R>` with a homomorphic `M` unwraps `R` to `M<R>`, which reaches the
+      distribution again with `R` as its argument, and `unwrap` starts a
+      fresh `seen` each call. main is fine on it; this branch segfaulted.
+      A set of arguments in progress was tried first and was not enough:
+      `type N = M<N | null>` re-enters with a different argument each time,
+      and the classification loop's own `unwrap` re-enters after the first
+      unwrap has returned. The bound is a depth of 8 over the whole body,
+      and past it the alias takes the plain substitution it took before.
+      tsc reports TS2456 on both aliases; that is not reported here.
+    - The index-only relation took a member that fit ANY target signature.
+      Every applicable signature has to fit: a `string` signature applies
+      to every member, and a `number` signature to a numeric-named property
+      and to a `string` or `number` signature. So `{ "0": string }` against
+      `{ [k: string]: string; [k: number]: "ok" }` read as fitting, and so
+      did a `string` signature of `string` values. Both were TPs on main,
+      where the relation was not decided at all.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

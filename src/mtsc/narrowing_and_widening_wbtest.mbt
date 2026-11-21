@@ -4228,6 +4228,46 @@ test "a homomorphic mapped alias maps nullish members to themselves (homomorphic
 }
 
 ///|
+test "a cyclic homomorphic mapped alias terminates (cyclicmapped)" {
+  // tsc reports TS2456 on both aliases, which is a declared MISS here; what
+  // this pins is that the check stops expanding and reaches the next line.
+  let src =
+    #|// @strict: true
+    #|type M<T> = { [K in keyof T]: T[K] };
+    #|type R = M<R>;
+    #|type N = M<N | null>;
+    #|declare const r: R;
+    #|declare const n: N;
+    #|export const x: R = r;
+    #|export const y: N = n;
+    #|export const bad: string = 1;
+  assert_eq(issue_lines(src), [
+    "top-level > binding `bad` init: expected `string` but got `number`",
+  ])
+}
+
+///|
+test "an index-only interface's every applicable signature constrains (indexonlyboth)" {
+  let src =
+    #|// @strict: true
+    #|interface Both { [k: string]: string; [k: number]: "ok" }
+    #|declare const zeroString: { "0": string };
+    #|declare const zeroOk: { "0": "ok" };
+    #|declare const strIdx: { [k: string]: string };
+    #|declare const strIdxOk: { [k: string]: "ok" };
+    #|declare const named: { a: string };
+    #|export const okZero: Both = zeroOk;
+    #|export const okStrIdx: Both = strIdxOk;
+    #|export const okNamed: Both = named;
+    #|export const badZero: Both = zeroString;
+    #|export const badStrIdx: Both = strIdx;
+  assert_eq(issue_lines(src), [
+    "top-level > binding `badZero` init: expected `Both` but got `{ 0: string }`",
+    "top-level > binding `badStrIdx` init: expected `Both` but got `{ [x: string]: string }`",
+  ])
+}
+
+///|
 test "a lib alias with no body abstains as a union member too (libaliasunion)" {
   let src =
     #|// @strict: true

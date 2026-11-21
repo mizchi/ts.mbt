@@ -9023,6 +9023,29 @@
       ]
     },
     {
+      "case": "relations/circularHomomorphicMappedAlias.ts",
+      "area": "relations",
+      "name": "circularHomomorphicMappedAlias",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322,
+        2456
+      ],
+      "baseline": "baselines/circularHomomorphicMappedAlias.errors.txt",
+      "claims": [
+        {
+          "name": "badAfter",
+          "kind": "bad",
+          "fromLine": 11,
+          "toLine": 12
+        }
+      ]
+    },
+    {
       "case": "relations/coalesceLeftOperandDecidesResult.ts",
       "area": "relations",
       "name": "coalesceLeftOperandDecidesResult",
@@ -9987,44 +10010,74 @@
         {
           "name": "okAnyValues",
           "kind": "ok",
-          "fromLine": 17,
-          "toLine": 17
-        },
-        {
-          "name": "okListValues",
-          "kind": "ok",
-          "fromLine": 18,
-          "toLine": 18
-        },
-        {
-          "name": "okSpread",
-          "kind": "ok",
           "fromLine": 19,
           "toLine": 19
         },
         {
-          "name": "okStringCoversNumber",
+          "name": "okListValues",
           "kind": "ok",
           "fromLine": 20,
           "toLine": 20
         },
         {
-          "name": "badIndexValue",
-          "kind": "bad",
+          "name": "okSpread",
+          "kind": "ok",
           "fromLine": 21,
           "toLine": 21
         },
         {
-          "name": "badProperty",
-          "kind": "bad",
+          "name": "okStringCoversNumber",
+          "kind": "ok",
           "fromLine": 22,
           "toLine": 22
         },
         {
-          "name": "badNumberValue",
+          "name": "badIndexValue",
           "kind": "bad",
           "fromLine": 23,
+          "toLine": 23
+        },
+        {
+          "name": "badProperty",
+          "kind": "bad",
+          "fromLine": 24,
           "toLine": 24
+        },
+        {
+          "name": "badNumberValue",
+          "kind": "bad",
+          "fromLine": 25,
+          "toLine": 25
+        },
+        {
+          "name": "okZero",
+          "kind": "ok",
+          "fromLine": 32,
+          "toLine": 32
+        },
+        {
+          "name": "okStrIdx",
+          "kind": "ok",
+          "fromLine": 33,
+          "toLine": 33
+        },
+        {
+          "name": "okNamed",
+          "kind": "ok",
+          "fromLine": 34,
+          "toLine": 34
+        },
+        {
+          "name": "badZero",
+          "kind": "bad",
+          "fromLine": 35,
+          "toLine": 35
+        },
+        {
+          "name": "badStrIdx",
+          "kind": "bad",
+          "fromLine": 36,
+          "toLine": 37
         }
       ]
     },

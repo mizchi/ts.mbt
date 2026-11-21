@@ -2150,6 +2150,14 @@ fn inlined_bound_param(
 }
 
 ///|
+/// How many `distribute_homomorphic_mapped_alias` calls are on the stack.
+/// A cyclic alias argument re-enters it through `unwrap`, and the argument
+/// it re-enters with is not the same type each time (`type N = M<N |
+/// null>` substitutes into its own argument), so the bound is a depth
+/// rather than a set of arguments in progress.
+let homomorphic_alias_depth : Ref[Int32] = { val: 0, }
+
+///|
 /// A HOMOMORPHIC mapped alias, `{ [P in keyof T]: … }` over its own type
 /// parameter, maps a primitive, `null`, `undefined` or `void` constituent
 /// of a union argument to itself: univer's
@@ -2176,6 +2184,31 @@ fn distribute_homomorphic_mapped_alias(
     Some(a) => a
     None => return None
   }
+  // Unwrapping the argument, expanding its alias members and classifying
+  // them can each expand this same alias again: `type R = M<R>` with a
+  // homomorphic `M` unwraps `R` to `M<R>`, which lands here with `R` as the
+  // argument, and `unwrap` starts a fresh `seen` each call. Past the bound
+  // this abstains, which falls back to plain substitution, as before this
+  // distribution existed.
+  if homomorphic_alias_depth.val >= 8 {
+    return None
+  }
+  homomorphic_alias_depth.val += 1
+  let out = distribute_homomorphic_members(r, body, bindings, p, arg)
+  homomorphic_alias_depth.val -= 1
+  out
+}
+
+///|
+/// The body of `distribute_homomorphic_mapped_alias`, run inside its depth
+/// bound.
+fn distribute_homomorphic_members(
+  r : Resolver,
+  body : @ast.TsType,
+  bindings : Map[String, @ast.TsType],
+  p : String,
+  arg : @ast.TsType,
+) -> @ast.TsType? {
   let members = match r.unwrap(arg) {
     Union(items) =>
       union_components(expand_union_alias_members(r, Union(items)))
@@ -37825,11 +37858,15 @@ fn named_open_record_interface(ty : @ast.TsType, resolver : Resolver) -> Bool {
 
 ///|
 /// Whether every member of the object type `src` fits an interface that
-/// declares nothing but index signatures: a property must fit a `string`
-/// signature (or a `number` one, under a numeric name), and an index
-/// signature must meet one of the same key kind. A value of `any` fits
-/// anything; anything this cannot decide answers `false`, which leaves the
-/// comparison to report as before.
+/// declares nothing but index signatures. Each member must fit EVERY target
+/// signature that applies to it: a `string` signature applies to every
+/// member, and a `number` signature to a numeric-named property, to a
+/// `number` signature and to a `string` one, since a string index covers
+/// numeric keys too. So `{ "0": string }` against `{ [k: string]: string;
+/// [k: number]: "ok" }` is an error (probed). A member no signature applies
+/// to, a value this cannot decide, or anything else unmodelled answers
+/// `false`, which leaves the comparison to report as before. A value of
+/// `any` fits anything.
 fn object_fits_index_only_interface(
   src : @ast.TsType,
   target : @ast.TsType,
@@ -37855,30 +37892,18 @@ fn object_fits_index_only_interface(
   fields
   .iter()
   .all(fn(f) {
-    match f.0 {
-      Literal(k) if k.has_prefix("@@") => false
+    let numeric_key = match f.0 {
+      Literal(k) if k.has_prefix("@@") => return false
       Literal(k) =>
-        sigs
-        .iter()
-        .any(fn(sig) {
-          (
-            sig.0 is String_ ||
-            (
-              sig.0 is Number &&
-              k.length() > 0 &&
-              k.iter().all(fn(c) { c >= '0' && c <= '9' })
-            )
-          ) &&
-          fits(f.1, sig.1)
-        })
-      // A `string` signature covers a `number` one, never the reverse.
-      String_ =>
-        sigs
-        .iter()
-        .any(fn(sig) { sig.0 is (String_ | Number) && fits(f.1, sig.1) })
-      Number => sigs.iter().any(fn(sig) { sig.0 is Number && fits(f.1, sig.1) })
-      _ => false
+        k.length() > 0 && k.iter().all(fn(c) { c >= '0' && c <= '9' })
+      String_ | Number => true
+      _ => return false
     }
+    let applicable = sigs.filter(fn(sig) {
+      sig.0 is String_ || (sig.0 is Number && numeric_key)
+    })
+    applicable.length() > 0 &&
+    applicable.iter().all(fn(sig) { fits(f.1, sig.1) })
   })
 }
 
