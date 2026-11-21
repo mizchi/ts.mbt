@@ -2620,6 +2620,11 @@ fn Parser::jsx_type_args_span(self : Parser, open : Int32) -> (Int32, Int32)? {
   let mut depth = 1
   let mut j = i + 1
   while j < self.src.length() {
+    let skipped = self.jsx_type_arg_skip(j)
+    if skipped > j {
+      j = skipped
+      continue
+    }
     let cc = self.src[j].to_int().unsafe_to_char()
     if cc == '<' {
       depth += 1
@@ -2632,6 +2637,59 @@ fn Parser::jsx_type_args_span(self : Parser, open : Int32) -> (Int32, Int32)? {
     j += 1
   }
   None
+}
+
+///|
+/// The position after a string literal, a template literal or a comment
+/// starting at `j` inside a JSX element's type arguments, or `j` itself when
+/// none starts there. The type-argument scans count angle brackets, and one
+/// inside `"<"` or a comment is not one: `<Box<() => "<">>08 px</Box>` closed
+/// its arguments at the element's own `>`, so the header parser read `08`
+/// and `px` as attributes (#329's review). An unterminated string stops at
+/// its line end, which is where the lexer stops it too.
+fn Parser::jsx_type_arg_skip(self : Parser, j : Int32) -> Int32 {
+  let n = self.src.length()
+  let c = self.src[j].to_int().unsafe_to_char()
+  if c == '"' || c == '\'' || c == '`' {
+    let mut k = j + 1
+    while k < n {
+      let d = self.src[k].to_int().unsafe_to_char()
+      if d == '\\' {
+        k += 2
+        continue
+      }
+      if d == c {
+        return k + 1
+      }
+      if d == '\n' && c != '`' {
+        return k
+      }
+      k += 1
+    }
+    return n
+  }
+  if c == '/' && j + 1 < n {
+    let d = self.src[j + 1].to_int().unsafe_to_char()
+    if d == '/' {
+      let mut k = j + 2
+      while k < n && self.src[k].to_int().unsafe_to_char() != '\n' {
+        k += 1
+      }
+      return k
+    }
+    if d == '*' {
+      let mut k = j + 2
+      while k + 1 < n {
+        if self.src[k].to_int().unsafe_to_char() == '*' &&
+          self.src[k + 1].to_int().unsafe_to_char() == '/' {
+          return k + 2
+        }
+        k += 1
+      }
+      return n
+    }
+  }
+  j
 }
 
 ///|
@@ -2692,6 +2750,11 @@ fn Parser::parse_jsx_opening_header(
     let mut depth = 1
     let mut j = i + 1
     while j < self.src.length() && depth > 0 {
+      let skipped = self.jsx_type_arg_skip(j)
+      if skipped > j {
+        j = skipped
+        continue
+      }
       let cc = self.src[j].to_int().unsafe_to_char()
       if cc == '<' {
         depth += 1

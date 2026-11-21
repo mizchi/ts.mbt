@@ -1095,6 +1095,46 @@
       ]
     },
     {
+      "case": "controlFlow/declaredUnionNarrowedByInitializer.ts",
+      "area": "controlFlow",
+      "name": "declaredUnionNarrowedByInitializer",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2741
+      ],
+      "baseline": "baselines/declaredUnionNarrowedByInitializer.errors.txt",
+      "claims": [
+        {
+          "name": "okLet",
+          "kind": "ok",
+          "fromLine": 11,
+          "toLine": 11
+        },
+        {
+          "name": "okConst",
+          "kind": "ok",
+          "fromLine": 12,
+          "toLine": 12
+        },
+        {
+          "name": "badReassigned",
+          "kind": "bad",
+          "fromLine": 13,
+          "toLine": 13
+        },
+        {
+          "name": "badOtherMember",
+          "kind": "bad",
+          "fromLine": 14,
+          "toLine": 15
+        }
+      ]
+    },
+    {
       "case": "controlFlow/destructuredDiscriminantBoundaries.ts",
       "area": "controlFlow",
       "name": "destructuredDiscriminantBoundaries",
@@ -1420,6 +1460,34 @@
           "kind": "bad",
           "fromLine": 21,
           "toLine": 22
+        }
+      ]
+    },
+    {
+      "case": "controlFlow/forHeadBindingShadowsOuter.ts",
+      "area": "controlFlow",
+      "name": "forHeadBindingShadowsOuter",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/forHeadBindingShadowsOuter.errors.txt",
+      "claims": [
+        {
+          "name": "okShadowed",
+          "kind": "ok",
+          "fromLine": 6,
+          "toLine": 11
+        },
+        {
+          "name": "badOuterAssigned",
+          "kind": "bad",
+          "fromLine": 12,
+          "toLine": 18
         }
       ]
     },
@@ -2287,6 +2355,53 @@
       ]
     },
     {
+      "case": "controlFlow/nestedNullableAliasTruthiness.ts",
+      "area": "controlFlow",
+      "name": "nestedNullableAliasTruthiness",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        18048,
+        18049
+      ],
+      "baseline": "baselines/nestedNullableAliasTruthiness.errors.txt",
+      "claims": [
+        {
+          "name": "okTruthy",
+          "kind": "ok",
+          "fromLine": 9,
+          "toLine": 9
+        },
+        {
+          "name": "okEarlyReturn",
+          "kind": "ok",
+          "fromLine": 10,
+          "toLine": 10
+        },
+        {
+          "name": "okNotNullish",
+          "kind": "ok",
+          "fromLine": 11,
+          "toLine": 11
+        },
+        {
+          "name": "badUnguarded",
+          "kind": "bad",
+          "fromLine": 12,
+          "toLine": 12
+        },
+        {
+          "name": "badNullOnly",
+          "kind": "bad",
+          "fromLine": 13,
+          "toLine": 14
+        }
+      ]
+    },
+    {
       "case": "controlFlow/nullishAndOrRemoveVoid.ts",
       "area": "controlFlow",
       "name": "nullishAndOrRemoveVoid",
@@ -2348,6 +2463,40 @@
           "kind": "bad",
           "fromLine": 23,
           "toLine": 24
+        }
+      ]
+    },
+    {
+      "case": "controlFlow/numericLiteralEqualityRemovesNullish.ts",
+      "area": "controlFlow",
+      "name": "numericLiteralEqualityRemovesNullish",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2345
+      ],
+      "baseline": "baselines/numericLiteralEqualityRemovesNullish.errors.txt",
+      "claims": [
+        {
+          "name": "okTruthyOrZero",
+          "kind": "ok",
+          "fromLine": 7,
+          "toLine": 13
+        },
+        {
+          "name": "okEqual",
+          "kind": "ok",
+          "fromLine": 14,
+          "toLine": 18
+        },
+        {
+          "name": "badNotEqual",
+          "kind": "bad",
+          "fromLine": 19,
+          "toLine": 23
         }
       ]
     },
@@ -2428,6 +2577,52 @@
       ]
     },
     {
+      "case": "controlFlow/optionalChainComparisonRemovesVoid.ts",
+      "area": "controlFlow",
+      "name": "optionalChainComparisonRemovesVoid",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2345
+      ],
+      "baseline": "baselines/optionalChainComparisonRemovesVoid.errors.txt",
+      "claims": [
+        {
+          "name": "okEarlyReturn",
+          "kind": "ok",
+          "fromLine": 9,
+          "toLine": 9
+        },
+        {
+          "name": "okNotUndefined",
+          "kind": "ok",
+          "fromLine": 10,
+          "toLine": 10
+        },
+        {
+          "name": "okLooseNull",
+          "kind": "ok",
+          "fromLine": 11,
+          "toLine": 11
+        },
+        {
+          "name": "okValue",
+          "kind": "ok",
+          "fromLine": 12,
+          "toLine": 12
+        },
+        {
+          "name": "badNotNull",
+          "kind": "bad",
+          "fromLine": 13,
+          "toLine": 14
+        }
+      ]
+    },
+    {
       "case": "controlFlow/optionalChainConstNarrowsReceiver.ts",
       "area": "controlFlow",
       "name": "optionalChainConstNarrowsReceiver",
@@ -2454,6 +2649,61 @@
           "toLine": 24
         }
       ]
+    },
+    {
+      "case": "controlFlow/optionalChainIndexSeesReceiver.ts",
+      "area": "controlFlow",
+      "name": "optionalChainIndexSeesReceiver",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        18048
+      ],
+      "baseline": "baselines/optionalChainIndexSeesReceiver.errors.txt",
+      "claims": [
+        {
+          "name": "okOptionalLength",
+          "kind": "ok",
+          "fromLine": 8,
+          "toLine": 8
+        },
+        {
+          "name": "okPlainLength",
+          "kind": "ok",
+          "fromLine": 9,
+          "toLine": 9
+        },
+        {
+          "name": "okNestedChain",
+          "kind": "ok",
+          "fromLine": 10,
+          "toLine": 10
+        },
+        {
+          "name": "badOutsideChain",
+          "kind": "bad",
+          "fromLine": 11,
+          "toLine": 12
+        }
+      ]
+    },
+    {
+      "case": "controlFlow/orFallbackAssignmentNarrows.ts",
+      "area": "controlFlow",
+      "name": "orFallbackAssignmentNarrows",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2345
+      ],
+      "baseline": "baselines/orFallbackAssignmentNarrows.errors.txt",
+      "claims": []
     },
     {
       "case": "controlFlow/realCodeNarrowingShapes.ts",
@@ -3947,6 +4197,58 @@
       "claims": []
     },
     {
+      "case": "inference/arrayElementsKeepDeclaredLiterals.ts",
+      "area": "inference",
+      "name": "arrayElementsKeepDeclaredLiterals",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2345
+      ],
+      "baseline": "baselines/arrayElementsKeepDeclaredLiterals.errors.txt",
+      "claims": [
+        {
+          "name": "okMapped",
+          "kind": "ok",
+          "fromLine": 13,
+          "toLine": 17
+        },
+        {
+          "name": "okLiteral",
+          "kind": "ok",
+          "fromLine": 18,
+          "toLine": 22
+        },
+        {
+          "name": "okFreshWidens",
+          "kind": "ok",
+          "fromLine": 23,
+          "toLine": 29
+        },
+        {
+          "name": "badPropertyKept",
+          "kind": "bad",
+          "fromLine": 30,
+          "toLine": 32
+        },
+        {
+          "name": "badAnnotatedCallbackKept",
+          "kind": "bad",
+          "fromLine": 33,
+          "toLine": 35
+        },
+        {
+          "name": "badSpreadKept",
+          "kind": "bad",
+          "fromLine": 36,
+          "toLine": 39
+        }
+      ]
+    },
+    {
       "case": "inference/arrayMethodNamedCallbackAndPredicateFit.ts",
       "area": "inference",
       "name": "arrayMethodNamedCallbackAndPredicateFit",
@@ -5370,6 +5672,46 @@
           "kind": "ok",
           "fromLine": 12,
           "toLine": 15
+        }
+      ]
+    },
+    {
+      "case": "inference/mapCallbackObjectWidensPerMember.ts",
+      "area": "inference",
+      "name": "mapCallbackObjectWidensPerMember",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/mapCallbackObjectWidensPerMember.errors.txt",
+      "claims": [
+        {
+          "name": "okAsConstReturned",
+          "kind": "ok",
+          "fromLine": 8,
+          "toLine": 13
+        },
+        {
+          "name": "okAsConstBound",
+          "kind": "ok",
+          "fromLine": 14,
+          "toLine": 20
+        },
+        {
+          "name": "okExpressionBody",
+          "kind": "ok",
+          "fromLine": 21,
+          "toLine": 24
+        },
+        {
+          "name": "badFreshMember",
+          "kind": "bad",
+          "fromLine": 25,
+          "toLine": 29
         }
       ]
     },
@@ -6803,6 +7145,58 @@
       ]
     },
     {
+      "case": "lib/libStringAliasInUnionTarget.ts",
+      "area": "lib",
+      "name": "libStringAliasInUnionTarget",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2345
+      ],
+      "baseline": "baselines/libStringAliasInUnionTarget.errors.txt",
+      "claims": [
+        {
+          "name": "okBare",
+          "kind": "ok",
+          "fromLine": 10,
+          "toLine": 10
+        },
+        {
+          "name": "okOptional",
+          "kind": "ok",
+          "fromLine": 11,
+          "toLine": 11
+        },
+        {
+          "name": "okWithUndefined",
+          "kind": "ok",
+          "fromLine": 12,
+          "toLine": 12
+        },
+        {
+          "name": "okWithNull",
+          "kind": "ok",
+          "fromLine": 13,
+          "toLine": 13
+        },
+        {
+          "name": "badBare",
+          "kind": "bad",
+          "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "badWithUndefined",
+          "kind": "bad",
+          "fromLine": 15,
+          "toLine": 16
+        }
+      ]
+    },
+    {
       "case": "lib/objectEntriesValueType.ts",
       "area": "lib",
       "name": "objectEntriesValueType",
@@ -7358,6 +7752,41 @@
           "kind": "bad",
           "fromLine": 24,
           "toLine": 24
+        }
+      ]
+    },
+    {
+      "case": "parser/jsxTypeArgumentsQuotedText.tsx",
+      "area": "parser",
+      "name": "jsxTypeArgumentsQuotedText",
+      "options": {
+        "jsx": "preserve",
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/jsxTypeArgumentsQuotedText.errors.txt",
+      "claims": [
+        {
+          "name": "okQuotedLess",
+          "kind": "ok",
+          "fromLine": 6,
+          "toLine": 6
+        },
+        {
+          "name": "okQuotedGreater",
+          "kind": "ok",
+          "fromLine": 7,
+          "toLine": 7
+        },
+        {
+          "name": "badAfter",
+          "kind": "bad",
+          "fromLine": 8,
+          "toLine": 9
         }
       ]
     },

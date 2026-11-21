@@ -8243,6 +8243,76 @@ product surfaces now.
     type-argument span early, so `<Box<() => 0x> />` lost its TS1125, at
     both span scans. And a union with an `unknown` member admits `undefined`,
     so `delete` on `unknown | number` is legal; that was pre-existing.
+  Batch HT is univer's next categories and #329's three Minors. univer
+  docs-hyper-link goes 3 -> 0, core 15 -> 12, data-validation 27 -> 13,
+  sheets-numfmt 26 -> 12 and ui 16 -> 9, effect 58 -> 56 and excalidraw
+  44 -> 42, with no report at a new site and the oracle unchanged. Each
+  cell was checked against the TS7 nightly before the fix was written.
+  - **An array keeps literals that are not fresh.** A declaration widened
+    every literal in an array initializer's element type, while tsc widens
+    a FRESH literal only. So `[getSep(1)]` and `xs.map((x) => getSep(x))`,
+    with `getSep` declared to return `'-' | '/' | null`, read as `(string |
+    null)[]`, and univer's `if (separator) completeNumericDatePattern(…,
+    separator)` was a mismatch. A literal written in place, an enum member,
+    a generic call (`[id("x")]` widens) and an inline callback's literal
+    still widen. Probing was what decided the call rule: a call to a
+    non-generic function declaration is not fresh, since an unannotated one
+    is inferred with its literals already widened.
+  - **A `map` callback's object literal widens member by member.** The
+    element type of `xs.map((r) => ({ …, require: 'a' as const }))` was
+    deep-widened, so the `as const` member read as `string`. The callback's
+    one returned object literal now goes through the declaration's own
+    per-member widening.
+  - **An index inside an optional chain sees its receiver non-nullish.**
+    `stack?.[stack?.length - 1]` evaluates the index only when `stack` is
+    not nullish, as a call's arguments already were. univer's `rollback`
+    read the index as `number | undefined` minus one.
+  - **A numeric literal comparison rules out nullish.** `r === 0` over
+    `number | undefined` is `number` on the equal side, so the false branch
+    of `!r && r !== 0` is `number` (univer's `Cell._getWidthResult`).
+  - **A declared union is narrowed by a class initializer.** `let v:
+    FunctionVariantType = … ? (x as BaseValueObject) : array` kept the
+    whole union, while `v = array` narrowed. Only a member the initializer
+    NAMES is kept, so nothing is decided by structure.
+  - **A guard opens an alias of an alias.** `non_nullable_resolved` opened
+    one level, so `Nullable<Nullable<ICellData>> | undefined`, what
+    `matrix?.getValue(r, c)` returns, kept the inner alias after
+    `if (!anchor) return`.
+  - **A lib alias with no body abstains as a union member.** The bare
+    `k: CanvasFontKerning` already abstained, and `k?: CanvasFontKerning`
+    reported `'normal'` as "expected `CanvasFontKerning | undefined` but
+    got `string`". Only a lib name with no VALUE abstains, which is what a
+    lib type alias is. Two first versions were too wide and the gates
+    caught both: an enum member type (`Direction.LEFT`) lost its check,
+    which a unit test caught, and so did a lib CLASS, which the mutation
+    differential caught as one lost TP: `addDays(null)` against date-fns's
+    `DateArg<Date> = Date | number | string`. A string outside the alias
+    is a declared MISS in both spellings.
+  - **An optional-chain comparison removes `void`.** `if (c?.v ===
+    undefined || c?.v === null) return` made the receiver non-null and
+    non-undefined and kept univer's `Nullable<T>`'s `void`, which
+    short-circuits a chain the same way.
+  - **`x = a || b` is never nullish when `b` is not.** `||` sat beside
+    `??` in the assignment's never-nullish test and had no arm, so univer's
+    `viewPort = this.findViewportByPosToScene(pos) ||
+    this.getDefaultViewport()` kept the declared `| undefined`.
+  - **A function type in a union is parenthesized** in messages:
+    `() => void | undefined` read as a function returning `void |
+    undefined`. Three univer reports are reprinted at the same sites.
+  - **#329's Minors.** A `for` loop's `let` head was narrowed back into an
+    outer binding of the same name after the loop, a false positive the
+    loop-exit join introduced. A method with a declared `this` parameter
+    is no longer a plain getter. And the JSX type-argument scans counted
+    angle brackets inside a string literal type or a comment, so
+    `<Box<() => "<">>08 px</Box>` read `08` and `px` as attributes.
+  - **Found and left.** `let v = id("x"); v = "y"` and `let v = f4(true)`
+    over an unannotated arrow `const` are pre-existing false positives (a
+    generic call's or an arrow's literal result is a widening literal in
+    tsc). A module-level `const xs = [1, 2]` reads as `any` inside a
+    function body, which made the first version of this batch's array test
+    exercise nothing; the fixture declares `xs` instead. univer's
+    `sheet-interceptor` reports need a generic arrow's type parameters,
+    which are not in the AST.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

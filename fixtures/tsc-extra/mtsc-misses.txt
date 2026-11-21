@@ -82,3 +82,5 @@ jsxPayloadFailsBeforeItsEnd:badPayloadMissingSemicolon  a JSX payload whose pars
 unannotatedGetterMethodReturn:badInferredField  only a method whose body is exactly `return this.FIELD` with a DECLARED field type returns that type at a call; `_n = 1` has no declared type, so `getN()` is `any`
 unannotatedGetterMethodReturn:badLiteralReturn  same cause as `badInferredField`: an unannotated method returning a literal is `any` at a call
 loopAssignmentsReachExit:badNullableAfterWhile  the back-edge join does not keep the `undefined` an assigned call's declared return carries, so the binding after the loop is not read as possibly `undefined`
+libStringAliasInUnionTarget:badBare  the DOM's string-union aliases (`CanvasFontKerning`) have no body here, so a parameter typed by one accepts any argument rather than reporting on a member it lacks
+libStringAliasInUnionTarget:badWithUndefined  same cause as `badBare`; the alias as a union member abstains the same way, which is what keeps the legal `'normal'` silent
