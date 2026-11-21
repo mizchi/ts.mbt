@@ -2150,6 +2150,110 @@ fn inlined_bound_param(
 }
 
 ///|
+/// How many `distribute_homomorphic_mapped_alias` calls are on the stack.
+/// A cyclic alias argument re-enters it through `unwrap`, and the argument
+/// it re-enters with is not the same type each time (`type N = M<N |
+/// null>` substitutes into its own argument), so the bound is a depth
+/// rather than a set of arguments in progress.
+let homomorphic_alias_depth : Ref[Int32] = { val: 0, }
+
+///|
+/// A HOMOMORPHIC mapped alias, `{ [P in keyof T]: … }` over its own type
+/// parameter, maps a primitive, `null`, `undefined` or `void` constituent
+/// of a union argument to itself: univer's
+/// `DeepReadonly<Nullable<ISelectionCell>>` is `DeepReadonly<ISelectionCell>
+/// | null | undefined | void` in tsc, and mapping over `keyof` of the
+/// whole union left a target that admitted no nullish value, so returning
+/// a `Nullable<ISelectionCell>` was reported. Only those constituents are
+/// split off; the object ones stay ONE mapped type over their union, as
+/// before, because a union of mapped types is opaque to member lookup
+/// here where one mapped type abstains (a first version split every
+/// member, and excalidraw's `Mutable<ExcalidrawElement>` lost every
+/// member). An array or tuple constituent abstains, since tsc maps those
+/// element-wise.
+fn distribute_homomorphic_mapped_alias(
+  r : Resolver,
+  body : @ast.TsType,
+  bindings : Map[String, @ast.TsType],
+) -> @ast.TsType? {
+  let p = match body {
+    MappedType(_, Keyof(Named(p)), _, _) => p
+    _ => return None
+  }
+  let arg = match bindings.get(p) {
+    Some(a) => a
+    None => return None
+  }
+  // Unwrapping the argument, expanding its alias members and classifying
+  // them can each expand this same alias again: `type R = M<R>` with a
+  // homomorphic `M` unwraps `R` to `M<R>`, which lands here with `R` as the
+  // argument, and `unwrap` starts a fresh `seen` each call. Past the bound
+  // this abstains, which falls back to plain substitution, as before this
+  // distribution existed.
+  if homomorphic_alias_depth.val >= 8 {
+    return None
+  }
+  homomorphic_alias_depth.val += 1
+  let out = distribute_homomorphic_members(r, body, bindings, p, arg)
+  homomorphic_alias_depth.val -= 1
+  out
+}
+
+///|
+/// The body of `distribute_homomorphic_mapped_alias`, run inside its depth
+/// bound.
+fn distribute_homomorphic_members(
+  r : Resolver,
+  body : @ast.TsType,
+  bindings : Map[String, @ast.TsType],
+  p : String,
+  arg : @ast.TsType,
+) -> @ast.TsType? {
+  let members = match r.unwrap(arg) {
+    Union(items) =>
+      union_components(expand_union_alias_members(r, Union(items)))
+    _ => return None
+  }
+  let kept : Array[@ast.TsType] = []
+  let objects : Array[@ast.TsType] = []
+  for m in members {
+    match r.unwrap(m) {
+      Null
+      | Undefined
+      | Void
+      | String_
+      | Number
+      | Int
+      | Boolean
+      | BigInt
+      | Symbol
+      | Literal(_)
+      | NumberLiteral(_)
+      | BooleanLiteral(_)
+      | BigIntLiteral(_) => if !kept.contains(m) { kept.push(m) }
+      Array(_) | Tuple(_) | Any | Unknown | Never => return None
+      _ => if !objects.contains(m) { objects.push(m) }
+    }
+  }
+  if kept.length() == 0 {
+    return None
+  }
+  let out : Array[@ast.TsType] = []
+  if objects.length() > 0 {
+    let b : Map[String, @ast.TsType] = Map([])
+    for k, v in bindings {
+      b[k] = v
+    }
+    b[p] = union_of(objects)
+    out.push(substitute_params(body, b))
+  }
+  for k in kept {
+    out.push(k)
+  }
+  Some(union_of(out))
+}
+
+///|
 /// A conditional alias whose CHECK type is a naked type parameter
 /// distributes over a union argument — that is what makes
 /// `Exclude<Formats, "regex">` remove one member_ty rather than answer for
@@ -3991,8 +4095,18 @@ fn type_accepts_undefined_param(ty : @ast.TsType) -> Bool {
 fn function_value_required_arity(expr : @ast.TsExpr) -> Int32? {
   match expr {
     ArrowFunc(params, _, _, _) => Some(required_arity(params))
-    FuncExpr(f) => Some(required_arity(f.params))
+    FuncExpr(f) => Some(required_arity(params_without_this(f.params)))
     _ => None
+  }
+}
+
+///|
+/// `params` without a leading `this` parameter, which types the receiver
+/// and takes no argument.
+fn params_without_this(params : Array[@ast.TsParam]) -> Array[@ast.TsParam] {
+  match params {
+    [first, .. rest] if first.name == "this" => rest.to_owned()
+    _ => params
   }
 }
 
@@ -4864,7 +4978,12 @@ fn Resolver::unwrap(self : Resolver, ty : @ast.TsType) -> @ast.TsType {
               bind_type_param_defaults(type_params, defaults, limit, bindings)
               cur = match distribute_conditional_alias(self, body, bindings) {
                 Some(t) => t
-                None => substitute_params(body, bindings)
+                None =>
+                  match
+                    distribute_homomorphic_mapped_alias(self, body, bindings) {
+                    Some(t) => t
+                    None => substitute_params(body, bindings)
+                  }
               }
             }
             None => keep_going = false
@@ -15803,7 +15922,12 @@ fn infer_expr_inner(
       @ast.TsType::Func(param_types, wrap_async_return(is_async, ret))
     }
     FuncExpr(f) => {
-      let param_types = callable_param_types(f.params)
+      // A leading `this` parameter types the receiver and takes no argument,
+      // as the declaration parsers already drop it: `throttle(function
+      // (this: { base: number }, step: number) { … })` returned a callable
+      // that "expected 2 argument(s)" at `ctx.throttled(1)` (univer's
+      // `utility-primitives.spec`; probed: tsc accepts it).
+      let param_types = callable_param_types(params_without_this(f.params))
       // When no explicit return-type annotation was given, walk the body for
       // return statements — same strategy as ArrowBlock. A generator function
       // returns a `Generator` object, not its `return` value, so calling one
@@ -23098,6 +23222,15 @@ fn check_expr_against_shape(
     // why `const s = { allOf: xs }; const j: JsonSchema = s` reported.
     if inferred_u is Object(_) &&
       named_open_record_interface(expected_u, ctx.resolver) {
+      return
+    }
+    // The same for an interface that declares ONLY index signatures, when
+    // every member of the object type fits them: `{ [k: string]: any }`
+    // and `{ ...presets, ...custom }` against univer's `interface ILists {
+    // [listType: string]: IListData }` reached the structural comparison
+    // with the interface still `Named` and were reported (probed: tsc
+    // accepts both).
+    if object_fits_index_only_interface(inferred_u, expected_u, ctx.resolver) {
       return
     }
     let detail = "expected `\{exp_str}` but got `\{type_display(shown)}`"
@@ -37721,6 +37854,57 @@ fn named_open_record_interface(ty : @ast.TsType, resolver : Resolver) -> Bool {
       .any(fn(sig) { sig.0 is String_ && sig.1 is (Unknown | Any) })
     None => false
   }
+}
+
+///|
+/// Whether every member of the object type `src` fits an interface that
+/// declares nothing but index signatures. Each member must fit EVERY target
+/// signature that applies to it: a `string` signature applies to every
+/// member, and a `number` signature to a numeric-named property, to a
+/// `number` signature and to a `string` one, since a string index covers
+/// numeric keys too. So `{ "0": string }` against `{ [k: string]: string;
+/// [k: number]: "ok" }` is an error (probed). A member no signature applies
+/// to, a value this cannot decide, or anything else unmodelled answers
+/// `false`, which leaves the comparison to report as before. A value of
+/// `any` fits anything.
+fn object_fits_index_only_interface(
+  src : @ast.TsType,
+  target : @ast.TsType,
+  resolver : Resolver,
+) -> Bool {
+  let fields = match src {
+    Object(fields) if fields.length() > 0 => fields
+    _ => return false
+  }
+  let sigs = match target {
+    Named(n) =>
+      match resolver.interfaces.get(n) {
+        Some(i) if i.fields.length() == 0 &&
+          i.extends_names.length() == 0 &&
+          i.index_signatures.length() > 0 => i.index_signatures
+        _ => return false
+      }
+    _ => return false
+  }
+  let fits = fn(v : @ast.TsType, want : @ast.TsType) -> Bool {
+    v is Any || v == want || is_assignable_to(v, want)
+  }
+  fields
+  .iter()
+  .all(fn(f) {
+    let numeric_key = match f.0 {
+      Literal(k) if k.has_prefix("@@") => return false
+      Literal(k) =>
+        k.length() > 0 && k.iter().all(fn(c) { c >= '0' && c <= '9' })
+      String_ | Number => true
+      _ => return false
+    }
+    let applicable = sigs.filter(fn(sig) {
+      sig.0 is String_ || (sig.0 is Number && numeric_key)
+    })
+    applicable.length() > 0 &&
+    applicable.iter().all(fn(sig) { fits(f.1, sig.1) })
+  })
 }
 
 ///|

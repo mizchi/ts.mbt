@@ -1,0 +1,75 @@
+indexOnlyInterfaceFromObjectType.ts(23,14): error TS2322: Type '{ [k: string]: number; }' is not assignable to type 'ILists'.
+  'string' index signatures are incompatible.
+    Type 'number' is not assignable to type 'IListData'.
+indexOnlyInterfaceFromObjectType.ts(24,14): error TS2322: Type '{ a: number; }' is not assignable to type 'ILists'.
+  Property 'a' is incompatible with index signature.
+    Type 'number' is not assignable to type 'IListData'.
+indexOnlyInterfaceFromObjectType.ts(25,14): error TS2322: Type '{ [k: number]: number; }' is not assignable to type 'NumIdx'.
+  'number' index signatures are incompatible.
+    Type 'number' is not assignable to type 'string'.
+indexOnlyInterfaceFromObjectType.ts(35,14): error TS2322: Type '{ "0": string; }' is not assignable to type 'Both'.
+  Property '"0"' is incompatible with index signature.
+    Type 'string' is not assignable to type '"ok"'.
+indexOnlyInterfaceFromObjectType.ts(36,14): error TS2322: Type '{ [k: string]: string; }' is not assignable to type 'Both'.
+  'string' and 'number' index signatures are incompatible.
+    Type 'string' is not assignable to type '"ok"'.
+
+
+==== indexOnlyInterfaceFromObjectType.ts (5 errors) ====
+    // An object type is assignable to an interface that declares only index
+    // signatures when every member fits every signature that applies to it: a
+    // `string` signature applies to every member, and a `number` signature to a
+    // numeric-named property and to a `string` or `number` signature. So a
+    // `string` signature also fits a `number` one when its value does. A value
+    // that does not fit is an error, also when it fits another signature.
+    
+    interface IListData { listType: string }
+    interface ILists { [listType: string]: IListData }
+    interface NumIdx { [i: number]: string }
+    declare const anyValues: { [k: string]: any };
+    declare const listValues: { [k: string]: IListData };
+    declare const numberValues: { [k: string]: number };
+    declare const property: { a: number };
+    declare const stringIdx: { [k: string]: string };
+    declare const numIdxNumber: { [k: number]: number };
+    declare const snap: { lists?: ILists };
+    declare const presets: Record<string, IListData>;
+    export const okAnyValues: ILists = anyValues;
+    export const okListValues: ILists = listValues;
+    export const okSpread: ILists = { ...presets, ...(snap.lists ?? {}) };
+    export const okStringCoversNumber: NumIdx = stringIdx;
+    export const badIndexValue: ILists = numberValues;
+                 ~~~~~~~~~~~~~
+!!! error TS2322: Type '{ [k: string]: number; }' is not assignable to type 'ILists'.
+!!! error TS2322:   'string' index signatures are incompatible.
+!!! error TS2322:     Type 'number' is not assignable to type 'IListData'.
+    export const badProperty: ILists = property;
+                 ~~~~~~~~~~~
+!!! error TS2322: Type '{ a: number; }' is not assignable to type 'ILists'.
+!!! error TS2322:   Property 'a' is incompatible with index signature.
+!!! error TS2322:     Type 'number' is not assignable to type 'IListData'.
+    export const badNumberValue: NumIdx = numIdxNumber;
+                 ~~~~~~~~~~~~~~
+!!! error TS2322: Type '{ [k: number]: number; }' is not assignable to type 'NumIdx'.
+!!! error TS2322:   'number' index signatures are incompatible.
+!!! error TS2322:     Type 'number' is not assignable to type 'string'.
+    interface Both { [k: string]: string; [k: number]: "ok" }
+    declare const zeroString: { "0": string };
+    declare const zeroOk: { "0": "ok" };
+    declare const strIdx: { [k: string]: string };
+    declare const strIdxOk: { [k: string]: "ok" };
+    declare const named: { a: string };
+    export const okZero: Both = zeroOk;
+    export const okStrIdx: Both = strIdxOk;
+    export const okNamed: Both = named;
+    export const badZero: Both = zeroString;
+                 ~~~~~~~
+!!! error TS2322: Type '{ "0": string; }' is not assignable to type 'Both'.
+!!! error TS2322:   Property '"0"' is incompatible with index signature.
+!!! error TS2322:     Type 'string' is not assignable to type '"ok"'.
+    export const badStrIdx: Both = strIdx;
+                 ~~~~~~~~~
+!!! error TS2322: Type '{ [k: string]: string; }' is not assignable to type 'Both'.
+!!! error TS2322:   'string' and 'number' index signatures are incompatible.
+!!! error TS2322:     Type 'string' is not assignable to type '"ok"'.
+    

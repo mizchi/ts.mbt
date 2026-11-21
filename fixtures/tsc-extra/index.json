@@ -5455,6 +5455,59 @@
       ]
     },
     {
+      "case": "inference/functionExpressionThisParameter.ts",
+      "area": "inference",
+      "name": "functionExpressionThisParameter",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2345,
+        2554
+      ],
+      "baseline": "baselines/functionExpressionThisParameter.errors.txt",
+      "claims": [
+        {
+          "name": "okWrapped",
+          "kind": "ok",
+          "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "okBound",
+          "kind": "ok",
+          "fromLine": 15,
+          "toLine": 15
+        },
+        {
+          "name": "badTooMany",
+          "kind": "bad",
+          "fromLine": 16,
+          "toLine": 19
+        },
+        {
+          "name": "okCallback",
+          "kind": "ok",
+          "fromLine": 22,
+          "toLine": 22
+        },
+        {
+          "name": "okNoArgs",
+          "kind": "ok",
+          "fromLine": 23,
+          "toLine": 23
+        },
+        {
+          "name": "badCallbackArity",
+          "kind": "bad",
+          "fromLine": 24,
+          "toLine": 25
+        }
+      ]
+    },
+    {
       "case": "inference/genericCallableValueArgumentCount.ts",
       "area": "inference",
       "name": "genericCallableValueArgumentCount",
@@ -8970,6 +9023,29 @@
       ]
     },
     {
+      "case": "relations/circularHomomorphicMappedAlias.ts",
+      "area": "relations",
+      "name": "circularHomomorphicMappedAlias",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322,
+        2456
+      ],
+      "baseline": "baselines/circularHomomorphicMappedAlias.errors.txt",
+      "claims": [
+        {
+          "name": "badAfter",
+          "kind": "bad",
+          "fromLine": 11,
+          "toLine": 12
+        }
+      ]
+    },
+    {
       "case": "relations/coalesceLeftOperandDecidesResult.ts",
       "area": "relations",
       "name": "coalesceLeftOperandDecidesResult",
@@ -9856,6 +9932,152 @@
           "kind": "bad",
           "fromLine": 17,
           "toLine": 18
+        }
+      ]
+    },
+    {
+      "case": "relations/homomorphicMappedAliasOverNullable.ts",
+      "area": "relations",
+      "name": "homomorphicMappedAliasOverNullable",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/homomorphicMappedAliasOverNullable.errors.txt",
+      "claims": [
+        {
+          "name": "okReturn",
+          "kind": "ok",
+          "fromLine": 11,
+          "toLine": 11
+        },
+        {
+          "name": "okNull",
+          "kind": "ok",
+          "fromLine": 12,
+          "toLine": 12
+        },
+        {
+          "name": "okString",
+          "kind": "ok",
+          "fromLine": 13,
+          "toLine": 13
+        },
+        {
+          "name": "okLiteral",
+          "kind": "ok",
+          "fromLine": 14,
+          "toLine": 14
+        },
+        {
+          "name": "badNumber",
+          "kind": "bad",
+          "fromLine": 15,
+          "toLine": 15
+        },
+        {
+          "name": "badMember",
+          "kind": "bad",
+          "fromLine": 16,
+          "toLine": 16
+        },
+        {
+          "name": "badString",
+          "kind": "bad",
+          "fromLine": 17,
+          "toLine": 18
+        }
+      ]
+    },
+    {
+      "case": "relations/indexOnlyInterfaceFromObjectType.ts",
+      "area": "relations",
+      "name": "indexOnlyInterfaceFromObjectType",
+      "options": {
+        "strict": "true",
+        "target": "esnext"
+      },
+      "accepted": false,
+      "codes": [
+        2322
+      ],
+      "baseline": "baselines/indexOnlyInterfaceFromObjectType.errors.txt",
+      "claims": [
+        {
+          "name": "okAnyValues",
+          "kind": "ok",
+          "fromLine": 19,
+          "toLine": 19
+        },
+        {
+          "name": "okListValues",
+          "kind": "ok",
+          "fromLine": 20,
+          "toLine": 20
+        },
+        {
+          "name": "okSpread",
+          "kind": "ok",
+          "fromLine": 21,
+          "toLine": 21
+        },
+        {
+          "name": "okStringCoversNumber",
+          "kind": "ok",
+          "fromLine": 22,
+          "toLine": 22
+        },
+        {
+          "name": "badIndexValue",
+          "kind": "bad",
+          "fromLine": 23,
+          "toLine": 23
+        },
+        {
+          "name": "badProperty",
+          "kind": "bad",
+          "fromLine": 24,
+          "toLine": 24
+        },
+        {
+          "name": "badNumberValue",
+          "kind": "bad",
+          "fromLine": 25,
+          "toLine": 25
+        },
+        {
+          "name": "okZero",
+          "kind": "ok",
+          "fromLine": 32,
+          "toLine": 32
+        },
+        {
+          "name": "okStrIdx",
+          "kind": "ok",
+          "fromLine": 33,
+          "toLine": 33
+        },
+        {
+          "name": "okNamed",
+          "kind": "ok",
+          "fromLine": 34,
+          "toLine": 34
+        },
+        {
+          "name": "badZero",
+          "kind": "bad",
+          "fromLine": 35,
+          "toLine": 35
+        },
+        {
+          "name": "badStrIdx",
+          "kind": "bad",
+          "fromLine": 36,
+          "toLine": 37
         }
       ]
     },
