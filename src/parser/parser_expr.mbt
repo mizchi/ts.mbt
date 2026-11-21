@@ -2661,6 +2661,32 @@ fn Parser::jsx_type_arg_skip(self : Parser, j : Int32) -> Int32 {
       if d == c {
         return k + 1
       }
+      // A template literal type's `${…}` holds a type of its own, which
+      // can spell a backtick inside a nested literal: `${"`"}` does not
+      // end the template. Step over the substitution, its literals and
+      // its comments, to the brace that closes it.
+      if c == '`' &&
+        d == '$' &&
+        k + 1 < n &&
+        self.src[k + 1].to_int().unsafe_to_char() == '{' {
+        let mut depth = 1
+        k += 2
+        while k < n && depth > 0 {
+          let skipped = self.jsx_type_arg_skip(k)
+          if skipped > k {
+            k = skipped
+            continue
+          }
+          let e = self.src[k].to_int().unsafe_to_char()
+          if e == '{' {
+            depth += 1
+          } else if e == '}' {
+            depth -= 1
+          }
+          k += 1
+        }
+        continue
+      }
       if d == '\n' && c != '`' {
         return k
       }
@@ -2671,11 +2697,8 @@ fn Parser::jsx_type_arg_skip(self : Parser, j : Int32) -> Int32 {
   if c == '/' && j + 1 < n {
     let d = self.src[j + 1].to_int().unsafe_to_char()
     if d == '/' {
-      let mut k = j + 2
-      while k < n && self.src[k].to_int().unsafe_to_char() != '\n' {
-        k += 1
-      }
-      return k
+      // CR, LS and PS end a line comment as LF does.
+      return self.skip_source_line_comment(j)
     }
     if d == '*' {
       let mut k = j + 2

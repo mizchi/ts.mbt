@@ -8313,6 +8313,55 @@ product surfaces now.
     exercise nothing; the fixture declares `xs` instead. univer's
     `sheet-interceptor` reports need a generic arrow's type parameters,
     which are not in the AST.
+  Batch HU is univer's next three categories and #330's three Minors.
+  univer core goes 12 -> 6, data-validation 13 -> 11, sheets-numfmt
+  12 -> 10 and ui 9 -> 8, with no report at a new site and the oracle
+  unchanged. Each cell was checked against the TS7 nightly before the fix
+  was written.
+  - **An object fits an interface of index signatures.** univer's
+    `lists: { ...presets, ...(snap.lists ?? {}) }` against `interface
+    ILists { [listType: string]: IListData }` reached the final comparison
+    with the interface still `Named`, because the resolver-free relation
+    does not open an interface, and was reported. An object type now fits
+    an interface that declares only index signatures when every member
+    fits one: a property or a `string` signature against a `string`
+    signature, a `string` signature also against a `number` one, and a
+    numeric-named property against a `number` one. A value that does not
+    fit still reports.
+  - **A function expression's `this` parameter takes no argument.** This
+    file records four places that drop a leading `this` and two that did
+    not. The function-expression paths were two more. The callable type
+    inferred for a `function (this: T, step) {}` kept `this` as its first
+    parameter, so univer's `throttle(function (this: …, step) …)` called
+    with one argument read as "expected 2 argument(s), got 1". And the
+    function-value arity counted `this` against a callback slot, so
+    `on(function (this: T, e: number) {})` against `(e: number) => void`
+    read as requiring two arguments. A callback that requires more than
+    the slot supplies still reports, and the count no longer includes
+    `this`.
+  - **A homomorphic mapped alias maps a nullish member to itself.**
+    `{ [P in keyof T]: … }` over its own type parameter maps a primitive,
+    `null`, `undefined` or `void` member of a union argument to itself, so
+    univer's `DeepReadonly<Nullable<ISelectionCell>>` admits the nullish
+    members. Mapping over `keyof` of the whole union left a target that
+    admitted none, and returning a `Nullable<ISelectionCell>` was
+    reported. Only those members are split off. The object members stay
+    ONE mapped type over their union, because a union of mapped types is
+    opaque to member lookup here. A first version split every member, and
+    excalidraw's `Mutable<ExcalidrawElement>` lost every member (+13
+    reports). An array or tuple member abstains, since tsc maps those
+    element by element. A value that fits no member is a declared MISS,
+    because the remaining mapped member abstains.
+  - **#330's Minors.** The JSX type-argument scan ended a line comment at
+    LF only, so a bare CR, LS or PS let it run past the closing `>`. It now
+    uses `skip_source_line_comment`. It also ended a template literal type
+    at the first backtick, so `` <Box<`${"`"}`> /> `` ended the template
+    inside its substitution and lost every later report. The skip now steps
+    over each `${…}`, with its nested literals and comments. And the
+    `thisparamgetter` test called `read` on a receiver tsc rejects
+    (TS2684). It now uses a legal receiver whose field type is narrower
+    than the declared `this` (`value: "a"` against `{ value: string }`),
+    so the test fails if the return is taken from the field.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

@@ -1,0 +1,48 @@
+indexOnlyInterfaceFromObjectType.ts(21,14): error TS2322: Type '{ [k: string]: number; }' is not assignable to type 'ILists'.
+  'string' index signatures are incompatible.
+    Type 'number' is not assignable to type 'IListData'.
+indexOnlyInterfaceFromObjectType.ts(22,14): error TS2322: Type '{ a: number; }' is not assignable to type 'ILists'.
+  Property 'a' is incompatible with index signature.
+    Type 'number' is not assignable to type 'IListData'.
+indexOnlyInterfaceFromObjectType.ts(23,14): error TS2322: Type '{ [k: number]: number; }' is not assignable to type 'NumIdx'.
+  'number' index signatures are incompatible.
+    Type 'number' is not assignable to type 'string'.
+
+
+==== indexOnlyInterfaceFromObjectType.ts (3 errors) ====
+    // An object type is assignable to an interface that declares only index
+    // signatures when every member fits them: a property or a `string` index
+    // signature against a `string` signature, and a `string` signature also
+    // against a `number` one. A value that does not fit is an error.
+    
+    interface IListData { listType: string }
+    interface ILists { [listType: string]: IListData }
+    interface NumIdx { [i: number]: string }
+    declare const anyValues: { [k: string]: any };
+    declare const listValues: { [k: string]: IListData };
+    declare const numberValues: { [k: string]: number };
+    declare const property: { a: number };
+    declare const stringIdx: { [k: string]: string };
+    declare const numIdxNumber: { [k: number]: number };
+    declare const snap: { lists?: ILists };
+    declare const presets: Record<string, IListData>;
+    export const okAnyValues: ILists = anyValues;
+    export const okListValues: ILists = listValues;
+    export const okSpread: ILists = { ...presets, ...(snap.lists ?? {}) };
+    export const okStringCoversNumber: NumIdx = stringIdx;
+    export const badIndexValue: ILists = numberValues;
+                 ~~~~~~~~~~~~~
+!!! error TS2322: Type '{ [k: string]: number; }' is not assignable to type 'ILists'.
+!!! error TS2322:   'string' index signatures are incompatible.
+!!! error TS2322:     Type 'number' is not assignable to type 'IListData'.
+    export const badProperty: ILists = property;
+                 ~~~~~~~~~~~
+!!! error TS2322: Type '{ a: number; }' is not assignable to type 'ILists'.
+!!! error TS2322:   Property 'a' is incompatible with index signature.
+!!! error TS2322:     Type 'number' is not assignable to type 'IListData'.
+    export const badNumberValue: NumIdx = numIdxNumber;
+                 ~~~~~~~~~~~~~~
+!!! error TS2322: Type '{ [k: number]: number; }' is not assignable to type 'NumIdx'.
+!!! error TS2322:   'number' index signatures are incompatible.
+!!! error TS2322:     Type 'number' is not assignable to type 'string'.
+    

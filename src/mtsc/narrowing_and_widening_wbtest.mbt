@@ -4159,11 +4159,14 @@ test "a method with a declared this is not a plain getter (thisparamgetter)" {
   let src =
     #|// @strict: true
     #|class K {
-    #|  value: number = 1;
+    #|  value: "a" = "a";
     #|  read(this: { value: string }) { return this.value; }
     #|}
     #|declare const k: K;
-    #|export const s: string = k.read();
+    #|export const same: boolean = k.read() === "zzz";
+  // `K` satisfies the declared `this`, so the call is legal, and `read`
+  // returns `string`. Taking the return from `K.value` would give `"a"`,
+  // and `"a" === "zzz"` is TS2367.
   assert_eq(issue_lines(src), [])
 }
 
@@ -4178,6 +4181,50 @@ test "JSX type arguments skip quoted text (jsxtypeargquote)" {
     check_source(src, true).split("\n").map(fn(l) { l.to_owned() }).collect(),
     ["top-level > binding `bad` init: expected `string` but got `number`"],
   )
+}
+
+///|
+test "JSX type-argument scan: line terminators and substitutions (jsxtypeargterm)" {
+  let expected = [
+    "top-level > binding `bad` init: expected `string` but got `number`",
+  ]
+  // CR, LS and PS end a line comment as LF does, so the `>` after one
+  // still closes the type arguments.
+  for term in ["\r", "\u{2028}", "\u{2029}"] {
+    let src = "declare function Box<T>(p: { children?: unknown }): any;\n" +
+      "export const a = <Box<string // note" +
+      term +
+      "> />;\n" +
+      "export const bad: string = 1;\n"
+    assert_eq(
+      check_source(src, true).split("\n").map(fn(l) { l.to_owned() }).collect(),
+      expected,
+    )
+  }
+  // A template literal type's substitution can spell a backtick inside a
+  // nested literal, and that backtick does not end the template.
+  let src =
+    #|declare function Box<T>(p: { children?: unknown }): any;
+    #|export const c = <Box<`x${`y${">"}`}`>>08 px</Box>;
+    #|export const a = <Box<`${"`"}`> />;
+    #|export const bad: string = 1;
+  assert_eq(
+    check_source(src, true).split("\n").map(fn(l) { l.to_owned() }).collect(),
+    expected,
+  )
+}
+
+///|
+test "a homomorphic mapped alias maps nullish members to themselves (homomorphicmapped)" {
+  let src =
+    #|// @strict: true
+    #|type DeepReadonly<T> = { readonly [P in keyof T]: T[P] };
+    #|type Nullable<T> = T | null | undefined | void;
+    #|interface Cell { r: number; c: number }
+    #|declare function get(): Nullable<Cell>;
+    #|export function okReturn(): DeepReadonly<Nullable<Cell>> { return get(); }
+    #|export function okLiteral(): DeepReadonly<"a" | Cell> { return "a"; }
+  assert_eq(issue_lines(src), [])
 }
 
 ///|
@@ -4242,5 +4289,45 @@ test "a lib class in a union target keeps its check (libclassunion)" {
     #|export function bad() { return addDays(null, 1); }
   assert_eq(issue_lines(src), [
     "function bad > call `addDays` arg[0]: expected `DateArg<Date>` but got `null`",
+  ])
+}
+
+///|
+test "an object type fits an index-only interface (indexonlyiface)" {
+  let src =
+    #|// @strict: true
+    #|interface IListData { listType: string }
+    #|interface ILists { [listType: string]: IListData }
+    #|interface NumIdx { [i: number]: string }
+    #|declare const anyValues: { [k: string]: any };
+    #|declare const listValues: { [k: string]: IListData };
+    #|declare const numberValues: { [k: string]: number };
+    #|declare const stringIdx: { [k: string]: string };
+    #|export const okAnyValues: ILists = anyValues;
+    #|export const okListValues: ILists = listValues;
+    #|export const okStringCoversNumber: NumIdx = stringIdx;
+    #|export const badIndexValue: ILists = numberValues;
+  assert_eq(issue_lines(src), [
+    "top-level > binding `badIndexValue` init: expected `ILists` but got `{ [x: string]: number }`",
+  ])
+}
+
+///|
+test "a function expression's this parameter takes no argument (funcexprthis)" {
+  let src =
+    #|// @strict: true
+    #|declare function throttle<T extends (...args: any[]) => any>(fn: T, wait?: number): T;
+    #|const ctx = { base: 1, throttled: throttle(function (this: { base: number }, step: number) { return this.base + step; }) };
+    #|const plain = function (this: { base: number }, step: number) { return step; };
+    #|export const okWrapped = ctx.throttled(1);
+    #|export const badTooMany = plain(1, 2);
+    #|declare function on(cb: (e: number) => void): void;
+    #|declare function on0(cb: () => void): void;
+    #|export function okCallback() { on(function (this: { id: number }, e: number) { return; }); }
+    #|export function okNoArgs() { on0(function (this: { id: number }) {}); }
+    #|export function badCallbackArity() { on(function (this: { id: number }, e: number, extra: string) {}); }
+  assert_eq(issue_lines(src), [
+    "function badCallbackArity > call `on` arg[0]: expected `(number) => void` but the function value requires 2 argument(s); a target call signature accepts only 1",
+    "top-level > call `plain`: expected 1 argument(s), got 2",
   ])
 }
