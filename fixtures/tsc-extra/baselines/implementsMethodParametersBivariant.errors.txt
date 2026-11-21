@@ -11,9 +11,17 @@ implementsMethodParametersBivariant.ts(39,54): error TS2322: Type 'Wrong' is not
     Type '(value: string) => IK' is not assignable to type '(value: number, unit?: Unit | undefined) => IK'.
       Types of parameters 'value' and 'value' are incompatible.
         Type 'number' is not assignable to type 'string'.
+implementsMethodParametersBivariant.ts(43,55): error TS2416: Property 'm' in type 'BadCallableVsScalar' is not assignable to the same property in base type 'IScalar'.
+  Type '(cb: () => void) => void' is not assignable to type '(cb: number) => void'.
+    Types of parameters 'cb' and 'cb' are incompatible.
+      Type 'number' is not assignable to type '() => void'.
+implementsMethodParametersBivariant.ts(45,57): error TS2416: Property 'm' in type 'BadScalarVsCallable' is not assignable to the same property in base type 'ICallable'.
+  Type '(cb: number) => void' is not assignable to type '(cb: () => void) => void'.
+    Types of parameters 'cb' and 'cb' are incompatible.
+      Type '() => void' is not assignable to type 'number'.
 
 
-==== implementsMethodParametersBivariant.ts (3 errors) ====
+==== implementsMethodParametersBivariant.ts (5 errors) ====
     // A method that implements an interface method is compared bivariantly, and
     // an alias by what it expands to. A required `unit: Unit` implements
     // `unit?: Unit`, a defaulted parameter implements an optional one, and a
@@ -69,4 +77,20 @@ implementsMethodParametersBivariant.ts(39,54): error TS2322: Type 'Wrong' is not
 !!! error TS2322:     Type '(value: string) => IK' is not assignable to type '(value: number, unit?: Unit | undefined) => IK'.
 !!! error TS2322:       Types of parameters 'value' and 'value' are incompatible.
 !!! error TS2322:         Type 'number' is not assignable to type 'string'.
+    
+    // A callable against a scalar is incompatible in either direction.
+    interface IScalar { m(cb: number): void; }
+    export class BadCallableVsScalar implements IScalar { m(cb: () => void): void {} }
+                                                          ~
+!!! error TS2416: Property 'm' in type 'BadCallableVsScalar' is not assignable to the same property in base type 'IScalar'.
+!!! error TS2416:   Type '(cb: () => void) => void' is not assignable to type '(cb: number) => void'.
+!!! error TS2416:     Types of parameters 'cb' and 'cb' are incompatible.
+!!! error TS2416:       Type 'number' is not assignable to type '() => void'.
+    interface ICallable { m(cb: () => void): void; }
+    export class BadScalarVsCallable implements ICallable { m(cb: number): void {} }
+                                                            ~
+!!! error TS2416: Property 'm' in type 'BadScalarVsCallable' is not assignable to the same property in base type 'ICallable'.
+!!! error TS2416:   Type '(cb: number) => void' is not assignable to type '(cb: () => void) => void'.
+!!! error TS2416:     Types of parameters 'cb' and 'cb' are incompatible.
+!!! error TS2416:       Type '() => void' is not assignable to type 'number'.
     

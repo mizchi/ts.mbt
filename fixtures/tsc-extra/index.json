@@ -187,7 +187,19 @@
           "name": "badAssignToInterface",
           "kind": "bad",
           "fromLine": 39,
-          "toLine": 40
+          "toLine": 41
+        },
+        {
+          "name": "BadCallableVsScalar",
+          "kind": "bad",
+          "fromLine": 43,
+          "toLine": 43
+        },
+        {
+          "name": "BadScalarVsCallable",
+          "kind": "bad",
+          "fromLine": 45,
+          "toLine": 46
         }
       ]
     },
@@ -1413,13 +1425,37 @@
           "name": "okUsedInConditionAnd",
           "kind": "ok",
           "fromLine": 14,
-          "toLine": 15
+          "toLine": 17
+        },
+        {
+          "name": "okCompoundIf",
+          "kind": "ok",
+          "fromLine": 19,
+          "toLine": 19
+        },
+        {
+          "name": "okCompoundIfRight",
+          "kind": "ok",
+          "fromLine": 20,
+          "toLine": 20
+        },
+        {
+          "name": "badCompoundIfUnused",
+          "kind": "bad",
+          "fromLine": 21,
+          "toLine": 21
+        },
+        {
+          "name": "badCompoundTernary",
+          "kind": "bad",
+          "fromLine": 22,
+          "toLine": 23
         },
         {
           "name": "okNarrowedOptional",
           "kind": "ok",
-          "fromLine": 17,
-          "toLine": 24
+          "fromLine": 25,
+          "toLine": 32
         }
       ]
     },
@@ -6993,22 +7029,34 @@
           "toLine": 16
         },
         {
-          "name": "badPayloadInFailedParens",
+          "name": "badParenthesizedTypeArgumentHex",
           "kind": "bad",
           "fromLine": 17,
           "toLine": 17
         },
         {
-          "name": "badPayloadInFailedForHead",
-          "kind": "bad",
+          "name": "okParenthesizedTypeArgumentText",
+          "kind": "ok",
           "fromLine": 18,
           "toLine": 18
         },
         {
-          "name": "badCommentAfterElement",
+          "name": "badPayloadInFailedParens",
           "kind": "bad",
           "fromLine": 19,
           "toLine": 19
+        },
+        {
+          "name": "badPayloadInFailedForHead",
+          "kind": "bad",
+          "fromLine": 20,
+          "toLine": 20
+        },
+        {
+          "name": "badCommentAfterElement",
+          "kind": "bad",
+          "fromLine": 21,
+          "toLine": 21
         }
       ]
     },
@@ -10211,7 +10259,19 @@
           "name": "BadNullField",
           "kind": "bad",
           "fromLine": 31,
-          "toLine": 35
+          "toLine": 36
+        },
+        {
+          "name": "okUnknownAlias",
+          "kind": "ok",
+          "fromLine": 41,
+          "toLine": 41
+        },
+        {
+          "name": "okAnyAlias",
+          "kind": "ok",
+          "fromLine": 42,
+          "toLine": 43
         }
       ]
     },

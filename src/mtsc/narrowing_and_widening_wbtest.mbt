@@ -3655,6 +3655,12 @@ test "delete through an alias that admits undefined (deletealias)" {
     #|  private _f: Nullable<(x?: number) => void>;
     #|  okDispose() { delete this._f; }
     #|}
+    #|type Unk = unknown;
+    #|type An = any;
+    #|interface J { u: Unk; a: An }
+    #|declare const j: J;
+    #|export function okUnknownAlias() { delete j.u; }
+    #|export function okAnyAlias() { delete j.a; }
   assert_eq(issue_lines(src), [
     "function badC > delete: the operand of a `delete` operator must be optional",
     "function badD > delete: the operand of a `delete` operator must be optional",
@@ -3678,9 +3684,16 @@ test "a function tested and then used is not TS2774 (fnguardused)" {
     #|export function badUnusedIf() { if (g) { return 1; } return 0; }
     #|export function okUsedLater() { if (g) { const h = g; return h; } return 0; }
     #|export function okUsedInAndOfIf() { if (g && g()) { return 1; } return 0; }
+    #|declare const ready: boolean;
+    #|export function okCompoundIf() { if (f && ready) { f(); } }
+    #|export function okCompoundIfRight() { if (ready && f) { f(); } }
+    #|export function badCompoundIfUnused() { if (f && ready) { return 1; } return 0; }
+    #|export function badCompoundTernary() { return f && ready ? f() : 0; }
   assert_eq(issue_lines(src), [
     "function badUnusedAnd > condition: this condition will always return true since this function is always defined: did you mean to call it instead?",
     "function badUnusedIf > condition: this condition will always return true since this function is always defined: did you mean to call it instead?",
+    "function badCompoundIfUnused > condition: this condition will always return true since this function is always defined: did you mean to call it instead?",
+    "function badCompoundTernary > condition: this condition will always return true since this function is always defined: did you mean to call it instead?",
   ])
 }
 
@@ -3714,9 +3727,15 @@ test "implements compares method parameters bivariantly (implementsbivariant)" {
     #|export class BadReturn implements IN { add(value: number): string { return ""; } }
     #|class Wrong { add(value: string): IK { return null as any; } }
     #|export function badAssign(w: Wrong): IK { return w; }
+    #|interface IS { m(cb: number): void }
+    #|export class BadCallableVsScalar implements IS { m(cb: () => void): void {} }
+    #|interface IC { m(cb: () => void): void }
+    #|export class BadScalarVsCallable implements IC { m(cb: number): void {} }
   assert_eq(issue_lines(src), [
     "function badAssign > return: expected `IK` but got `Wrong`", "class BadParam: incorrectly implements interface `IK`: method `add` of type `(number, boolean) => IK` is not assignable to `(number, Unit | undefined) => IK`",
     "class BadReturn: incorrectly implements interface `IN`: method `add` of type `(number) => string` is not assignable to `(number) => number`",
+    "class BadCallableVsScalar: incorrectly implements interface `IS`: method `m` of type `(() => void) => void` is not assignable to `(number) => void`",
+    "class BadScalarVsCallable: incorrectly implements interface `IC`: method `m` of type `(number) => void` is not assignable to `(() => void) => void`",
   ])
 }
 

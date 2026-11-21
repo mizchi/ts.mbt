@@ -10047,6 +10047,12 @@ priv struct CheckCtx {
   // (`var s: string; ({ [s]() {} })` is accepted), so flagging it would be a
   // false positive. Undefined-name (TS2304) checking still runs.
   mut in_computed_key : Bool
+  // The condition of the `if` being checked and its then-block, so a
+  // `&&` that IS that condition counts a use of its tested function in the
+  // then-block too (TS2774; tsc's `checkBinaryLikeExpression` passes the
+  // `if` body for exactly this operand). Compared by identity, so a `&&`
+  // nested deeper in the condition does not inherit the body.
+  mut if_condition_body : (@ast.TsExpr, @ast.TsBlock)?
   // True only for the walk over a SCRIPT's own top-level statements.
   // A few rules are correct at that one scope and nowhere else: the
   // TS2454 exemption for a `var` redeclaring a runtime-provided lib
@@ -26819,6 +26825,45 @@ fn method_override_incompatible(
           // not model, so `on(l: (i: Info) => void)` read as incompatible
           // with `on(l: Listener)` where `Listener` takes
           // `(Readonly<Info>, Opts?)` (univer's `CommandService`; probed).
+          //
+          // Only when BOTH sides are callable, though: a callable against a
+          // definite scalar is incompatible in either direction, and
+          // `m(cb: () => void)` implementing `m(cb: number)` is TS2416
+          // (probed, both ways). Anything else beside a callable abstains.
+          (
+            Func(_, _)
+            | CallableMeta(_, _)
+            | GenericFunc(_, _, _)
+            | Constructor(_, _, _),
+            Func(_, _)
+            | CallableMeta(_, _)
+            | GenericFunc(_, _, _)
+            | Constructor(_, _, _),
+          ) => continue
+          (
+            Func(_, _)
+            | CallableMeta(_, _)
+            | GenericFunc(_, _, _)
+            | Constructor(_, _, _),
+            Number
+            | String_
+            | Boolean
+            | BigInt
+            | Symbol
+            | Literal(_),
+          )
+          | (
+            Number
+            | String_
+            | Boolean
+            | BigInt
+            | Symbol
+            | Literal(_),
+            Func(_, _)
+            | CallableMeta(_, _)
+            | GenericFunc(_, _, _)
+            | Constructor(_, _, _),
+          ) => return true
           (
             Func(_, _)
             | CallableMeta(_, _)
@@ -30249,6 +30294,7 @@ fn check_arrow_with_context(
     strict_property_init: ctx.strict_property_init,
     strict_null_checks: ctx.strict_null_checks,
     in_computed_key: false,
+    if_condition_body: None,
   }
   let pre_len = ctx.issues.length()
   match body {
@@ -30509,6 +30555,7 @@ fn check_funcexpr_with_context(
     strict_property_init: ctx.strict_property_init,
     strict_null_checks: ctx.strict_null_checks,
     in_computed_key: false,
+    if_condition_body: None,
   }
   let _ = sub_path
   // A function expression has its own dynamic `this` (unlike an arrow, which
@@ -39693,7 +39740,10 @@ fn check_stmt_unsuppressed(
       }
     Throw(e) => check_call_args_in_expr(env, e, ctx)
     If(cond, then_block, else_block) => {
+      let outer_if = ctx.if_condition_body
+      ctx.if_condition_body = Some((cond, then_block))
       check_call_args_in_expr(env, cond, ctx)
+      ctx.if_condition_body = outer_if
       record_function_as_condition(env, ctx, cond, fn() { "\{then_block}" })
       let pre_map : Map[String, @ast.TsType] = Map([])
       for e in env.full_snapshot() {
@@ -42889,7 +42939,20 @@ fn check_call_args_in_expr_at(
           )
         } else if op is And {
           // TS2774 is the `&&` operand only: `f || 1` is ACCEPTED (probed).
-          record_function_as_condition(env, ctx, l, fn() { "\{r}" })
+          // A `&&` that is itself an `if` condition counts a use in the
+          // then-block as well: `if (f && ready) { f() }` is accepted, while
+          // the same `&&` as a ternary's condition (`f && ready ? f() : 0`)
+          // is reported (both probed).
+          let if_body = match ctx.if_condition_body {
+            Some((c, b)) if physical_equal(c, expr) => Some(b)
+            _ => None
+          }
+          record_function_as_condition(env, ctx, l, fn() {
+            match if_body {
+              Some(b) => "\{r} \{b}"
+              None => "\{r}"
+            }
+          })
         }
       }
       // TS2322 (via the `in` operator's operand constraints): the left
@@ -43268,8 +43331,10 @@ fn check_call_args_in_expr_at(
                       // `unknown` admits it too; `void` does not (probed:
                       // `number | void` is TS2790, `Nullable<number>` and
                       // `unknown` are legal).
-                      if is_checkable(ft) &&
-                        !(ft is Unknown) &&
+                      // An alias of `unknown` / `any` admits it as the
+                      // type written out does (probed).
+                      if is_checkable(ctx.resolver.unwrap(ft)) &&
+                        !(ctx.resolver.unwrap(ft) is Unknown) &&
                         !target_admits_nullish(ctx.resolver, ft, false, 0) &&
                         !reached_only_through_index_signature(
                           ctx.resolver,
@@ -45620,6 +45685,7 @@ fn check_function_body_with(
     strict_property_init,
     strict_null_checks,
     in_computed_key: false,
+    if_condition_body: None,
   }
   // Bind parameter names into the environment. Destructured params
   // (`function f({ a, b }: T)` / `function f([a, b]: T[])`) carry a
@@ -59848,6 +59914,7 @@ fn check_module_function_bodies_layered(
       strict_property_init,
       strict_null_checks,
       in_computed_key: false,
+      if_condition_body: None,
     }
     let env = ExprEnv::new()
     for v in module_.values {
@@ -59886,6 +59953,7 @@ fn check_module_function_bodies_layered(
       strict_property_init,
       strict_null_checks,
       in_computed_key: false,
+      if_condition_body: None,
     }
     let env = ExprEnv::new()
     for v in module_.values {
@@ -59956,6 +60024,7 @@ fn check_module_function_bodies_layered(
       strict_property_init,
       strict_null_checks,
       in_computed_key: true,
+      if_condition_body: None,
     }
     let env = ExprEnv::new()
     for v in module_.values {
@@ -60008,6 +60077,7 @@ fn check_module_function_bodies_layered(
       strict_property_init,
       strict_null_checks,
       in_computed_key: false,
+      if_condition_body: None,
     }
     let env = ExprEnv::new()
     for v in module_.values {

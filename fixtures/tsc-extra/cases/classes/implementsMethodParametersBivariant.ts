@@ -40,3 +40,9 @@ export class BadReturn implements IN {
 }
 class Wrong { add(value: string): IK { return null as any; } }
 export function badAssignToInterface(w: Wrong): IK { return w; }
+
+// A callable against a scalar is incompatible in either direction.
+interface IScalar { m(cb: number): void; }
+export class BadCallableVsScalar implements IScalar { m(cb: () => void): void {} }
+interface ICallable { m(cb: () => void): void; }
+export class BadScalarVsCallable implements ICallable { m(cb: number): void {} }

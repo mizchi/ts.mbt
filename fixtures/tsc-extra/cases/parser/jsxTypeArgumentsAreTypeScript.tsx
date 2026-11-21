@@ -16,6 +16,8 @@ declare function Box<T>(p: { children?: unknown }): any;
 
 export const badTypeArgumentHex = <Box<0x> />;
 export const okTypeArgumentText = <Box<string>>08 px</Box>;
+export const badParenthesizedTypeArgumentHex = (<Box<0x>></Box>);
+export const okParenthesizedTypeArgumentText = (<Box<string>>08 px</Box>);
 export const badPayloadInFailedParens = <p>{(true && <b>{0x}</b>,)}</p>;
 export const badPayloadInFailedForHead = <p>{(() => { for (; <b>{0x}</b>, ; ) {} })()}</p>;
 export const badCommentAfterElement = <p /> /*

@@ -35,3 +35,11 @@ export class BadNullField {
   private _g: ((x?: number) => void) | null = null;
   dispose() { delete this._g; }
 }
+
+// An alias of `unknown` or `any` admits `undefined` as the type does.
+type Unk = unknown;
+type An = any;
+interface J { u: Unk; a: An }
+declare const j: J;
+export function okUnknownAlias() { delete j.u; }
+export function okAnyAlias() { delete j.a; }

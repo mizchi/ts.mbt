@@ -8167,6 +8167,27 @@ product surfaces now.
     needs the lexer to record those spans and the parser to re-lex the tail
     after such an element, and it is filed with the cells declared as
     MISSes (`jsxTextOpensNoBlockComment`, `jsxTextOpensNoTemplate`).
+  - **#328's review: one Major and five Minors, four fixed.**
+    - The Major was a false positive the TS2774 exemption still had:
+      `if (f && ready) { f() }` is accepted by tsc, because a `&&` that is
+      itself an `if` condition counts a use in the then-block. The same
+      `&&` as a ternary's condition is reported (both probed), so the
+      `if` handler records its condition and then-block in a context
+      slot, and the `&&` check counts the then-block only when its own
+      expression IS that condition, compared by identity.
+    - The callback abstention in `method_override_incompatible` also
+      skipped a callable against a scalar, which is TS2416 in either
+      direction. Now only two callables abstain.
+    - `delete` through an alias of `unknown` or `any` was TS2790.
+    - The parenthesized JSX shortcut never reaches the opening-header
+      parser, so `(<Box<0x>></Box>)` lost its TS1125. The element's own
+      type arguments are reported there now; a nested element's are not,
+      since that scan does not parse children.
+    - Not reproduced: an optional method on a class EXPRESSION, which the
+      fallback cannot reach as a class target. Not observable: a JSX
+      default in a destructuring lookahead, because
+      `({ x = <Box<string> /> } = source)` is a parse error in every
+      binary, the legal spelling included. That parser gap is filed.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

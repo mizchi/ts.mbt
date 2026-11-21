@@ -48,3 +48,11 @@ deleteOperandAdmitsUndefined.ts(33,22): error TS2790: The operand of a 'delete' 
 !!! error TS2790: The operand of a 'delete' operator must be optional.
     }
     
+    // An alias of `unknown` or `any` admits `undefined` as the type does.
+    type Unk = unknown;
+    type An = any;
+    interface J { u: Unk; a: An }
+    declare const j: J;
+    export function okUnknownAlias() { delete j.u; }
+    export function okAnyAlias() { delete j.a; }
+    

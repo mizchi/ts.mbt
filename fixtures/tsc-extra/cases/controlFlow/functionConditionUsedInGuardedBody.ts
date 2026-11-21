@@ -16,6 +16,14 @@ export function badUnusedIf() { if (g) { return 1; } return 0; }
 export function okUsedAsValue() { if (g) { const h = g; return h; } return 0; }
 export function okUsedInConditionAnd() { if (g && g()) { return 1; } return 0; }
 
+// A `&&` that is itself an `if` condition counts a use in the then-block;
+// the same `&&` as a ternary's condition does not.
+declare const ready: boolean;
+export function okCompoundIf() { if (f && ready) { f(); } }
+export function okCompoundIfRight() { if (ready && f) { f(); } }
+export function badCompoundIfUnused() { if (f && ready) { return 1; } return 0; }
+export function badCompoundTernary() { return f && ready ? f() : 0; }
+
 interface P { onChange?: (v: string) => void; disabled?: boolean; value?: string }
 export function okNarrowedOptional(props: P) {
   const { onChange, disabled, value } = props;

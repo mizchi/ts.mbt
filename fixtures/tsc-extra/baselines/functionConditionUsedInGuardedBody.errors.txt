@@ -1,8 +1,10 @@
 functionConditionUsedInGuardedBody.ts(9,41): error TS2774: This condition will always return true since this function is always defined. Did you mean to call it instead?
 functionConditionUsedInGuardedBody.ts(12,37): error TS2774: This condition will always return true since this function is always defined. Did you mean to call it instead?
+functionConditionUsedInGuardedBody.ts(21,45): error TS2774: This condition will always return true since this function is always defined. Did you mean to call it instead?
+functionConditionUsedInGuardedBody.ts(22,47): error TS2774: This condition will always return true since this function is always defined. Did you mean to call it instead?
 
 
-==== functionConditionUsedInGuardedBody.ts (2 errors) ====
+==== functionConditionUsedInGuardedBody.ts (4 errors) ====
     // TS2774 ("this condition will always return true since this function is
     // always defined") is not reported when the tested function is used in the
     // guarded region: the `if` body, the true branch of a ternary, or the right
@@ -21,6 +23,18 @@ functionConditionUsedInGuardedBody.ts(12,37): error TS2774: This condition will 
 !!! error TS2774: This condition will always return true since this function is always defined. Did you mean to call it instead?
     export function okUsedAsValue() { if (g) { const h = g; return h; } return 0; }
     export function okUsedInConditionAnd() { if (g && g()) { return 1; } return 0; }
+    
+    // A `&&` that is itself an `if` condition counts a use in the then-block;
+    // the same `&&` as a ternary's condition does not.
+    declare const ready: boolean;
+    export function okCompoundIf() { if (f && ready) { f(); } }
+    export function okCompoundIfRight() { if (ready && f) { f(); } }
+    export function badCompoundIfUnused() { if (f && ready) { return 1; } return 0; }
+                                                ~
+!!! error TS2774: This condition will always return true since this function is always defined. Did you mean to call it instead?
+    export function badCompoundTernary() { return f && ready ? f() : 0; }
+                                                  ~
+!!! error TS2774: This condition will always return true since this function is always defined. Did you mean to call it instead?
     
     interface P { onChange?: (v: string) => void; disabled?: boolean; value?: string }
     export function okNarrowedOptional(props: P) {

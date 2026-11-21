@@ -8945,6 +8945,19 @@ test "parser: JSX type arguments, failed sub-parses and a trailing comment (jsxl
     ),
     ["hexadecimal digit expected"],
   )
+  // The parenthesized shortcut reaches no header parser.
+  assert_eq(
+    misuses(
+      "declare function Box<T>(p: {}): any;\nexport const a = (<Box<0x>></Box>);\n",
+    ),
+    ["hexadecimal digit expected"],
+  )
+  assert_eq(
+    misuses(
+      "declare function Box<T>(p: {}): any;\nexport const a = (<Box<string>>08 px</Box>);\n",
+    ),
+    [],
+  )
   assert_eq(misuses("export const x = <p /> /*"), ["`*/` expected"])
   assert_eq(misuses("export const x = <p>a</p> /*"), ["`*/` expected"])
   assert_eq(misuses("export const x = <p>a /* b</p>;\n"), [])
