@@ -1,25 +1,36 @@
-indexOnlyInterfaceFromObjectType.ts(23,14): error TS2322: Type '{ [k: string]: number; }' is not assignable to type 'ILists'.
+indexOnlyInterfaceFromObjectType.ts(25,14): error TS2322: Type '{ [k: string]: number; }' is not assignable to type 'ILists'.
   'string' index signatures are incompatible.
     Type 'number' is not assignable to type 'IListData'.
-indexOnlyInterfaceFromObjectType.ts(24,14): error TS2322: Type '{ a: number; }' is not assignable to type 'ILists'.
+indexOnlyInterfaceFromObjectType.ts(26,14): error TS2322: Type '{ a: number; }' is not assignable to type 'ILists'.
   Property 'a' is incompatible with index signature.
     Type 'number' is not assignable to type 'IListData'.
-indexOnlyInterfaceFromObjectType.ts(25,14): error TS2322: Type '{ [k: number]: number; }' is not assignable to type 'NumIdx'.
+indexOnlyInterfaceFromObjectType.ts(27,14): error TS2322: Type '{ [k: number]: number; }' is not assignable to type 'NumIdx'.
   'number' index signatures are incompatible.
     Type 'number' is not assignable to type 'string'.
-indexOnlyInterfaceFromObjectType.ts(35,14): error TS2322: Type '{ "0": string; }' is not assignable to type 'Both'.
+indexOnlyInterfaceFromObjectType.ts(37,14): error TS2322: Type '{ "0": string; }' is not assignable to type 'Both'.
   Property '"0"' is incompatible with index signature.
     Type 'string' is not assignable to type '"ok"'.
-indexOnlyInterfaceFromObjectType.ts(36,14): error TS2322: Type '{ [k: string]: string; }' is not assignable to type 'Both'.
+indexOnlyInterfaceFromObjectType.ts(38,14): error TS2322: Type '{ [k: string]: string; }' is not assignable to type 'Both'.
   'string' and 'number' index signatures are incompatible.
+    Type 'string' is not assignable to type '"ok"'.
+indexOnlyInterfaceFromObjectType.ts(46,14): error TS2322: Type '{ "-1": string; }' is not assignable to type 'Both'.
+  Property '"-1"' is incompatible with index signature.
+    Type 'string' is not assignable to type '"ok"'.
+indexOnlyInterfaceFromObjectType.ts(47,14): error TS2322: Type '{ "1.5": string; }' is not assignable to type 'Both'.
+  Property '"1.5"' is incompatible with index signature.
+    Type 'string' is not assignable to type '"ok"'.
+indexOnlyInterfaceFromObjectType.ts(48,14): error TS2322: Type '{ NaN: string; }' is not assignable to type 'Both'.
+  Property '"NaN"' is incompatible with index signature.
     Type 'string' is not assignable to type '"ok"'.
 
 
-==== indexOnlyInterfaceFromObjectType.ts (5 errors) ====
+==== indexOnlyInterfaceFromObjectType.ts (8 errors) ====
     // An object type is assignable to an interface that declares only index
     // signatures when every member fits every signature that applies to it: a
     // `string` signature applies to every member, and a `number` signature to a
-    // numeric-named property and to a `string` or `number` signature. So a
+    // numeric-named property and to a `string` or `number` signature. A name is
+    // numeric when it is the canonical spelling of a number (`"-1"`, `"1.5"`,
+    // `"NaN"`), so `"01"` and `"1e3"` are not. So a
     // `string` signature also fits a `number` one when its value does. A value
     // that does not fit is an error, also when it fits another signature.
     
@@ -71,5 +82,27 @@ indexOnlyInterfaceFromObjectType.ts(36,14): error TS2322: Type '{ [k: string]: s
                  ~~~~~~~~~
 !!! error TS2322: Type '{ [k: string]: string; }' is not assignable to type 'Both'.
 !!! error TS2322:   'string' and 'number' index signatures are incompatible.
+!!! error TS2322:     Type 'string' is not assignable to type '"ok"'.
+    declare const neg: { "-1": string };
+    declare const frac: { "1.5": string };
+    declare const nan: { "NaN": string };
+    declare const lead: { "01": string };
+    declare const exp: { "1e3": string };
+    export const okLeadingZero: Both = lead;
+    export const okExponent: Both = exp;
+    export const badNegative: Both = neg;
+                 ~~~~~~~~~~~
+!!! error TS2322: Type '{ "-1": string; }' is not assignable to type 'Both'.
+!!! error TS2322:   Property '"-1"' is incompatible with index signature.
+!!! error TS2322:     Type 'string' is not assignable to type '"ok"'.
+    export const badFraction: Both = frac;
+                 ~~~~~~~~~~~
+!!! error TS2322: Type '{ "1.5": string; }' is not assignable to type 'Both'.
+!!! error TS2322:   Property '"1.5"' is incompatible with index signature.
+!!! error TS2322:     Type 'string' is not assignable to type '"ok"'.
+    export const badNaN: Both = nan;
+                 ~~~~~~
+!!! error TS2322: Type '{ NaN: string; }' is not assignable to type 'Both'.
+!!! error TS2322:   Property '"NaN"' is incompatible with index signature.
 !!! error TS2322:     Type 'string' is not assignable to type '"ok"'.
     
