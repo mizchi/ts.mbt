@@ -1,10 +1,12 @@
-newCollectionShadowedByValue.ts(13,45): error TS2322: Type 'string' is not assignable to type 'number'.
+newCollectionShadowedByValue.ts(14,45): error TS2322: Type 'string' is not assignable to type 'number'.
+newCollectionShadowedByValue.ts(21,51): error TS2322: Type 'boolean' is not assignable to type 'number'.
 
 
-==== newCollectionShadowedByValue.ts (1 errors) ====
+==== newCollectionShadowedByValue.ts (2 errors) ====
     // `new Map<K, V>()` is the lib `Map` only when nothing in the module binds
     // the name `Map` as a value: here it is `CustomMap`, and a field holding
-    // one has `CustomMap`'s members.
+    // one has `CustomMap`'s members. A method PARAMETER named `Set` is not in
+    // scope at a field initializer, so a `new Set<T>()` field is the lib's.
     
     class CustomMap<K, V> { hello(): string { return "hi"; } }
     const Map = CustomMap;
@@ -17,4 +19,13 @@ newCollectionShadowedByValue.ts(13,45): error TS2322: Type 'string' is not assig
     export function badUse(h: Holder): number { return h.m.hello(); }
                                                 ~~~~~~
 !!! error TS2322: Type 'string' is not assignable to type 'number'.
+    
+    class SetHolder {
+      s = new Set<string>();
+      m(Set: number) { return Set; }
+    }
+    export function okSetHas(h: SetHolder): boolean { return h.s.has("x"); }
+    export function badSetHas(h: SetHolder): number { return h.s.has("x"); }
+                                                      ~~~~~~
+!!! error TS2322: Type 'boolean' is not assignable to type 'number'.
     

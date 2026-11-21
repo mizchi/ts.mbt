@@ -3108,6 +3108,13 @@ fn Parser::parse_class_body(
       None => false
     }
     if self.check(LParen) || is_getter_without_parens {
+      // An optional METHOD (`m?(): void`) rides the same sentinel as an
+      // optional field: `TsClassMethodDecl` has no optional flag, and a
+      // structural relation must not require such a method on the
+      // source. TS2729's consumer only ever looks up FIELD names in it.
+      if is_optional && !is_static {
+        self.optional_member_names.push(class_key_name(key))
+      }
       // Push a fresh "parameter property" scope when parsing a
       // constructor — `parse_param` records `public x` / `private y`
       // names there so we can synthesize `this.x = x` afterwards.

@@ -3588,3 +3588,202 @@ test "a value named Map shadows the lib collection (newcollectionshadow)" {
     #|}
   assert_eq(issue_lines(src), [])
 }
+
+///|
+/// A closure's copy of a module-level binding has no declared slot of its
+/// own, so an assignment inside the closure is judged against the
+/// binding's DECLARED type rather than against what the enclosing body had
+/// narrowed it to (probed: tsc accepts `dpi_cache = null` in the arrow
+/// after `dpi_cache = i`, and still reports a `string`).
+test "a closure assigns a module binding at its declared type (closuremoduleassign)" {
+  let src =
+    #|// @strict: true
+    #|type Nullable<T> = T | null | undefined | void;
+    #|let dpi_cache: Nullable<number>;
+    #|export function okGetDPI(): number {
+    #|  if (dpi_cache) { return dpi_cache; }
+    #|  let i = 56;
+    #|  dpi_cache = i;
+    #|  setTimeout(() => { dpi_cache = null; }, 10);
+    #|  return i;
+    #|}
+    #|let plain: number | null = null;
+    #|export function okPlain(): number {
+    #|  plain = 1;
+    #|  setTimeout(() => { plain = null; }, 10);
+    #|  return 1;
+    #|}
+    #|export function badClosure(): number {
+    #|  plain = 1;
+    #|  setTimeout(() => { plain = "x"; }, 10);
+    #|  return 1;
+    #|}
+  assert_eq(issue_lines(src), [
+    "function badClosure > assign `plain`: expected `number | null` but got `string`",
+  ])
+}
+
+///|
+/// TS2790: `delete` needs an operand whose type admits `undefined`. An
+/// alias counts by what it expands to, and `unknown` and `any` admit it;
+/// `null` and `void` do not (probed cell by cell).
+test "delete through an alias that admits undefined (deletealias)" {
+  let src =
+    #|// @strict: true
+    #|type Nullable<T> = T | null | undefined | void;
+    #|type Maybe<T> = T | undefined;
+    #|type OnlyNull<T> = T | null;
+    #|type V<T> = T | void;
+    #|interface I {
+    #|  a: Nullable<number>;
+    #|  b: Maybe<number>;
+    #|  c: OnlyNull<number>;
+    #|  d: V<number>;
+    #|  e: number | void;
+    #|  f: unknown;
+    #|  g: any;
+    #|}
+    #|declare const o: I;
+    #|export function okA() { delete o.a; }
+    #|export function okB() { delete o.b; }
+    #|export function badC() { delete o.c; }
+    #|export function badD() { delete o.d; }
+    #|export function badE() { delete o.e; }
+    #|export function okF() { delete o.f; }
+    #|export function okG() { delete o.g; }
+    #|export class ScrollTimer {
+    #|  private _f: Nullable<(x?: number) => void>;
+    #|  okDispose() { delete this._f; }
+    #|}
+    #|type Unk = unknown;
+    #|type An = any;
+    #|interface J { u: Unk; a: An }
+    #|declare const j: J;
+    #|export function okUnknownAlias() { delete j.u; }
+    #|export function okAnyAlias() { delete j.a; }
+  assert_eq(issue_lines(src), [
+    "function badC > delete: the operand of a `delete` operator must be optional",
+    "function badD > delete: the operand of a `delete` operator must be optional",
+    "function badE > delete: the operand of a `delete` operator must be optional",
+  ])
+}
+
+///|
+/// TS2774 is not reported when the tested function is used inside the
+/// guarded region: the `if` body, the ternary's true branch, or the right
+/// of `&&` (tsc's `isSymbolUsedInConditionBody`).
+test "a function tested and then used is not TS2774 (fnguardused)" {
+  let src =
+    #|// @strict: true
+    #|declare function f(): number;
+    #|declare const g: () => number;
+    #|export function okUsedAnd() { return f && f(); }
+    #|export function badUnusedAnd() { return f && 1; }
+    #|export function okUsedIf() { if (f) { f(); } }
+    #|export function okUsedTernary() { return f ? f() : 0; }
+    #|export function badUnusedIf() { if (g) { return 1; } return 0; }
+    #|export function okUsedLater() { if (g) { const h = g; return h; } return 0; }
+    #|export function okUsedInAndOfIf() { if (g && g()) { return 1; } return 0; }
+    #|declare const ready: boolean;
+    #|export function okCompoundIf() { if (f && ready) { f(); } }
+    #|export function okCompoundIfRight() { if (ready && f) { f(); } }
+    #|export function badCompoundIfUnused() { if (f && ready) { return 1; } return 0; }
+    #|export function badCompoundTernary() { return f && ready ? f() : 0; }
+  assert_eq(issue_lines(src), [
+    "function badUnusedAnd > condition: this condition will always return true since this function is always defined: did you mean to call it instead?",
+    "function badUnusedIf > condition: this condition will always return true since this function is always defined: did you mean to call it instead?",
+    "function badCompoundIfUnused > condition: this condition will always return true since this function is always defined: did you mean to call it instead?",
+    "function badCompoundTernary > condition: this condition will always return true since this function is always defined: did you mean to call it instead?",
+  ])
+}
+
+///|
+/// A method implementing an interface method is compared bivariantly, and
+/// an alias parameter by what it expands to: `unit: Unit` implements
+/// `unit?: Unit`, a defaulted parameter implements an optional one, and a
+/// callback parameter with fewer parameters implements a wider one. An
+/// incompatible parameter or return still reports.
+test "implements compares method parameters bivariantly (implementsbivariant)" {
+  let src =
+    #|// @strict: true
+    #|type Unit = "day" | "millisecond";
+    #|interface IK { add(value: number, unit?: Unit): IK; }
+    #|export class OkDefault implements IK {
+    #|  add(value: number, unit: Unit = "millisecond") { return this; }
+    #|}
+    #|export class OkRequired implements IK {
+    #|  add(value: number, unit: Unit): IK { return this; }
+    #|}
+    #|interface Info { id: string }
+    #|interface Opts { quiet?: boolean }
+    #|type Listener = (info: Readonly<Info>, options?: Opts) => void;
+    #|interface ISvc { on(listener: Listener): void; }
+    #|export class OkFewerParams implements ISvc {
+    #|  on(listener: (info: Info) => void): void {}
+    #|}
+    #|export function okAssign(a: OkRequired): IK { return a; }
+    #|export class BadParam implements IK { add(value: number, unit: boolean): IK { return this as any; } }
+    #|interface IN { add(value: number): number; }
+    #|export class BadReturn implements IN { add(value: number): string { return ""; } }
+    #|class Wrong { add(value: string): IK { return null as any; } }
+    #|export function badAssign(w: Wrong): IK { return w; }
+    #|interface IS { m(cb: number): void }
+    #|export class BadCallableVsScalar implements IS { m(cb: () => void): void {} }
+    #|interface IC { m(cb: () => void): void }
+    #|export class BadScalarVsCallable implements IC { m(cb: number): void {} }
+  assert_eq(issue_lines(src), [
+    "function badAssign > return: expected `IK` but got `Wrong`", "class BadParam: incorrectly implements interface `IK`: method `add` of type `(number, boolean) => IK` is not assignable to `(number, Unit | undefined) => IK`",
+    "class BadReturn: incorrectly implements interface `IN`: method `add` of type `(number) => string` is not assignable to `(number) => number`",
+    "class BadCallableVsScalar: incorrectly implements interface `IS`: method `m` of type `(() => void) => void` is not assignable to `(number) => void`",
+    "class BadScalarVsCallable: incorrectly implements interface `IC`: method `m` of type `(number) => void` is not assignable to `(() => void) => void`",
+  ])
+}
+
+///|
+/// The class-target method check in the function-return fallback skips an
+/// OPTIONAL method, which the source may lack, and still requires a
+/// required one, abstract or not (probed).
+test "an optional target method is not required (optionaltargetmethod)" {
+  let src =
+    #|// @strict: true
+    #|class Target { value = 0; optional?(): void; }
+    #|class Source { value = 0; }
+    #|declare const source: () => Source;
+    #|export const okTarget: () => Target = source;
+    #|abstract class Target2 { value = 0; optional?(): void; abstract req(): void; }
+    #|export const badTarget: () => Target2 = source;
+    #|class T3 { value = 0; m(): void {} }
+    #|export const badT3: () => T3 = source;
+  assert_eq(issue_lines(src), [
+    "top-level > binding `badTarget` init: expected `() => Target2` but got `() => Source`",
+    "top-level > binding `badT3` init: expected `() => T3` but got `() => Source`",
+  ])
+}
+
+///|
+/// Only a binding in scope at the field initializer shadows the lib
+/// collection: a METHOD PARAMETER named `Map` does not, so the field keeps
+/// the lib `Map` type, while a top-level `function Set() {}` does.
+test "a parameter named Map does not shadow the lib collection (newcollectionparam)" {
+  let src =
+    #|// @strict: true
+    #|export class C {
+    #|  cache = new Map<string, number>();
+    #|  unrelated(Map: unknown) {}
+    #|  s = new Set<string>();
+    #|  m(Set: number) { return Set; }
+    #|}
+    #|export function badCache(c: C) { const s: string = c.cache.get("a"); return s; }
+    #|export function badSet(c: C) { const n: number = c.s.has("x"); return n; }
+  assert_eq(issue_lines(src), [
+    "function badCache > binding `s` init: type `number | undefined` is not assignable to type `string`",
+    "function badSet > binding `n` init: expected `number` but got `boolean`",
+  ])
+  let shadowed =
+    #|// @strict: true
+    #|class CustomMap<K, V> { hello(): string { return "hi"; } }
+    #|const Map = CustomMap;
+    #|export class Holder { m = new Map<string, number>(); }
+    #|export function okUse(h: Holder): string { return h.m.hello(); }
+  assert_eq(issue_lines(shadowed), [])
+}

@@ -5945,20 +5945,34 @@ fn inferred_primitive_field_type(
           // `transform.ts`) and a rest-tuple callback parameter (univer's
           // `fromCallback<[number]>`), so a top-level one stays `any`. A
           // name the module binds as a value (`const Map = CustomMap`) is
-          // not the lib's either.
+          // not the lib's either. Only a binding in scope at the
+          // initializer counts (`register_lib_collection_shadows`):
+          // `declared_value_names` holds parameters too, so
+          // `unrelated(Map: unknown) {}` in the same class would otherwise
+          // lose the field's type. A class declared inside a function, or
+          // in a namespace, keeps the wider test.
+          let shadowed = fn(n : String) {
+            if !cls.is_local &&
+              resolver.globals.get("@value-shadows-known") is Some(_) {
+              resolver.globals.get("@value-shadows:" + n) is Some(_) ||
+              resolver.globals.get(n) is Some(_)
+            } else {
+              resolver.declared_value_names.get(n) is Some(_)
+            }
+          }
           match cls.instance_field_inits[i].1 {
             TypeArgs(targs, New("Map" | "WeakMap" as n, _)) if targs.length() ==
               2 &&
               resolver.classes.get(n) is None &&
               resolver.interfaces.get(n) is None &&
-              resolver.declared_value_names.get(n) is None &&
+              !shadowed(n) &&
               targs.iter().all(is_checkable) =>
               return Some(@ast.TsType::Applied(n, targs))
             TypeArgs(targs, New("Set" | "WeakSet" as n, _)) if targs.length() ==
               1 &&
               resolver.classes.get(n) is None &&
               resolver.interfaces.get(n) is None &&
-              resolver.declared_value_names.get(n) is None &&
+              !shadowed(n) &&
               targs.iter().all(is_checkable) =>
               return Some(@ast.TsType::Applied(n, targs))
             _ => ()
@@ -10033,6 +10047,12 @@ priv struct CheckCtx {
   // (`var s: string; ({ [s]() {} })` is accepted), so flagging it would be a
   // false positive. Undefined-name (TS2304) checking still runs.
   mut in_computed_key : Bool
+  // The condition of the `if` being checked and its then-block, so a
+  // `&&` that IS that condition counts a use of its tested function in the
+  // then-block too (TS2774; tsc's `checkBinaryLikeExpression` passes the
+  // `if` body for exactly this operand). Compared by identity, so a `&&`
+  // nested deeper in the condition does not inherit the body.
+  mut if_condition_body : (@ast.TsExpr, @ast.TsBlock)?
   // True only for the walk over a SCRIPT's own top-level statements.
   // A few rules are correct at that one scope and nowhere else: the
   // TS2454 exemption for a `var` redeclaring a runtime-provided lib
@@ -11439,12 +11459,21 @@ fn tested_condition_is_always_defined_function(
 }
 
 ///|
+///
+/// `guarded` renders the code the test guards (an `if` body, a ternary's
+/// true branch, the right of `&&`), and a function the guarded code
+/// mentions is exempt, as tsc's `isSymbolUsedInConditionBody` makes it:
+/// `onChange && onChange(value)` and `if (f) { f() }` are the guard written
+/// on purpose (univer's `Radio`; probed). It is a thunk because rendering is
+/// paid only when a function is tested at all.
 fn record_function_as_condition(
   env : ExprEnv,
   ctx : CheckCtx,
   expr : @ast.TsExpr,
+  guarded : () -> String,
 ) -> Unit {
-  if tested_condition_is_always_defined_function(env, ctx, expr) {
+  if tested_condition_is_always_defined_function(env, ctx, expr) &&
+    !(expr is Var(name) && rendered_mentions_name(guarded(), name)) {
     record_unfiltered(
       ctx, "condition", "this condition will always return true since this function is always defined: did you mean to call it instead?",
     )
@@ -23111,6 +23140,17 @@ fn struct_field_assignable(
     is_assignable_to(enum_members_as_enums(resolver, h), w) {
     return true
   }
+  // A member callable on both sides compares its parameters BIVARIANTLY,
+  // as tsc compares a method's (strictFunctionTypes exempts methods): a
+  // class's `add(v: number, unit: Unit)` is an interface's `add(v: number,
+  // unit?: Unit)`, so `return this` against the interface is legal
+  // (univer's `DateKitImpl`; probed). A function-typed PROPERTY is compared
+  // the same way, which can only lose a finding.
+  if h is (Func(_, _) | CallableMeta(_, _)) &&
+    w is (Func(_, _) | CallableMeta(_, _)) &&
+    is_assignable_to_bivariant(h, w) {
+    return true
+  }
   // An enum or an enum-literal type is assignable to what its VALUES are:
   // `S` to `string`, `S.X` to `"x"`, a numeric member to its number (tsc's
   // `isSimpleTypeRelatedTo`, probed). The resolver-free relation knows
@@ -26768,13 +26808,76 @@ fn method_override_incompatible(
         return false
       }
       for i in 0..<dps.length() {
-        let dp = resolver.unwrap(dps[i])
-        let bp = resolver.unwrap(bps[i])
+        // An alias inside a union is expanded too: a defaulted parameter is
+        // `Unit` against the interface's optional `Unit | undefined`, and
+        // with `Unit` an alias the two only compare once both are literals
+        // (univer's `DateKitImpl.add`; probed).
+        let dp = resolver.unwrap_containers(dps[i])
+        let bp = resolver.unwrap_containers(bps[i])
         match (dp, bp) {
           (Any, _) | (_, Any) | (Unknown, _) | (_, Unknown) => continue
           (Applied(_, _), _) | (_, Applied(_, _)) => return false
           (Named(_), _) | (_, Named(_)) => return false
           (Rest(_), _) | (_, Rest(_)) => return false
+          // A CALLBACK parameter abstains: relating two callables needs
+          // their own parameters' bivariance, optionality and the lib
+          // wrappers in them (`Readonly<Info>`), which this comparison does
+          // not model, so `on(l: (i: Info) => void)` read as incompatible
+          // with `on(l: Listener)` where `Listener` takes
+          // `(Readonly<Info>, Opts?)` (univer's `CommandService`; probed).
+          //
+          // Only when BOTH sides are callable, though: a callable against a
+          // definite scalar is incompatible in either direction, and
+          // `m(cb: () => void)` implementing `m(cb: number)` is TS2416
+          // (probed, both ways). Anything else beside a callable abstains.
+          (
+            Func(_, _)
+            | CallableMeta(_, _)
+            | GenericFunc(_, _, _)
+            | Constructor(_, _, _),
+            Func(_, _)
+            | CallableMeta(_, _)
+            | GenericFunc(_, _, _)
+            | Constructor(_, _, _),
+          ) => continue
+          (
+            Func(_, _)
+            | CallableMeta(_, _)
+            | GenericFunc(_, _, _)
+            | Constructor(_, _, _),
+            Number
+            | String_
+            | Boolean
+            | BigInt
+            | Symbol
+            | Literal(_),
+          )
+          | (
+            Number
+            | String_
+            | Boolean
+            | BigInt
+            | Symbol
+            | Literal(_),
+            Func(_, _)
+            | CallableMeta(_, _)
+            | GenericFunc(_, _, _)
+            | Constructor(_, _, _),
+          ) => return true
+          (
+            Func(_, _)
+            | CallableMeta(_, _)
+            | GenericFunc(_, _, _)
+            | Constructor(_, _, _),
+            _,
+          )
+          | (
+            _,
+            Func(_, _)
+            | CallableMeta(_, _)
+            | GenericFunc(_, _, _)
+            | Constructor(_, _, _),
+          ) => continue
           _ => ()
         }
         // METHOD parameters are bivariant (strictFunctionTypes exempts
@@ -29807,8 +29910,7 @@ fn copy_env_into_closure(outer : ExprEnv, env : ExprEnv) -> Unit {
     if is_property_path_narrowing_key(entry.0) {
       continue
     }
-    env.bind(entry.0, entry.1)
-    keep_outer_declared(outer, env, entry.0)
+    copy_binding_into_closure(outer, env, entry.0, entry.1)
   }
   unnarrow_unstable_bindings(outer, env)
 }
@@ -29851,10 +29953,27 @@ fn object_literal_fits_member(src : @ast.TsType, m : @ast.TsType) -> Bool {
 /// `let done = false; if (done) return …; () => { done = true }` reported
 /// "expected `false`" — both lines tsc accepts. An assignment is always
 /// checked against the declaration, whichever scope it is written in.
-fn keep_outer_declared(outer : ExprEnv, env : ExprEnv, name : String) -> Unit {
+///
+/// A name the outer scope only NARROWED has no declared slot to carry: a
+/// module-level `let` the enclosing function assigned lives in `globals`,
+/// and an assignment falls back to that declaration. Binding it here would
+/// make the narrowing the closure's declaration, so `plain = 1;
+/// setTimeout(() => { plain = null })` with `let plain: number | null`
+/// reported "expected `number`" (univer's `getDPI`; probed: tsc accepts
+/// it). Such a name is narrowed in the closure instead, which leaves the
+/// declared slot empty.
+fn copy_binding_into_closure(
+  outer : ExprEnv,
+  env : ExprEnv,
+  name : String,
+  ty : @ast.TsType,
+) -> Unit {
   match outer.lookup_declared(name) {
-    Some(d) => env.declare_type(name, d)
-    None => ()
+    Some(d) => {
+      env.bind(name, ty)
+      env.declare_type(name, d)
+    }
+    None => env.narrow(name, ty)
   }
 }
 
@@ -30175,6 +30294,7 @@ fn check_arrow_with_context(
     strict_property_init: ctx.strict_property_init,
     strict_null_checks: ctx.strict_null_checks,
     in_computed_key: false,
+    if_condition_body: None,
   }
   let pre_len = ctx.issues.length()
   match body {
@@ -30388,8 +30508,7 @@ fn check_funcexpr_with_context(
     } else {
       entry.1
     }
-    env.bind(entry.0, captured)
-    keep_outer_declared(outer, env, entry.0)
+    copy_binding_into_closure(outer, env, entry.0, captured)
   }
   // And the narrowings this closure cannot rely on even when it is not a
   // class-expression body: `reset_narrowing` above answers the same
@@ -30436,6 +30555,7 @@ fn check_funcexpr_with_context(
     strict_property_init: ctx.strict_property_init,
     strict_null_checks: ctx.strict_null_checks,
     in_computed_key: false,
+    if_condition_body: None,
   }
   let _ = sub_path
   // A function expression has its own dynamic `this` (unlike an arrow, which
@@ -33304,7 +33424,7 @@ fn bind_callable_param(
   }
   // A parameter is a NEW binding, so nothing the enclosing scope recorded
   // under the same name applies to it: not the declared slot a closure
-  // copies in for its captured bindings (`keep_outer_declared`), which made
+  // copies in for its captured bindings (`copy_binding_into_closure`), which made
   // `x = null` inside `(x: string) => …` check against an outer
   // `x: string | null`, and not an outer `const`'s freshness marker.
   for i in first_new..<names.length() {
@@ -39620,8 +39740,11 @@ fn check_stmt_unsuppressed(
       }
     Throw(e) => check_call_args_in_expr(env, e, ctx)
     If(cond, then_block, else_block) => {
+      let outer_if = ctx.if_condition_body
+      ctx.if_condition_body = Some((cond, then_block))
       check_call_args_in_expr(env, cond, ctx)
-      record_function_as_condition(env, ctx, cond)
+      ctx.if_condition_body = outer_if
+      record_function_as_condition(env, ctx, cond, fn() { "\{then_block}" })
       let pre_map : Map[String, @ast.TsType] = Map([])
       for e in env.full_snapshot() {
         pre_map[e.0] = e.1
@@ -42816,7 +42939,20 @@ fn check_call_args_in_expr_at(
           )
         } else if op is And {
           // TS2774 is the `&&` operand only: `f || 1` is ACCEPTED (probed).
-          record_function_as_condition(env, ctx, l)
+          // A `&&` that is itself an `if` condition counts a use in the
+          // then-block as well: `if (f && ready) { f() }` is accepted, while
+          // the same `&&` as a ternary's condition (`f && ready ? f() : 0`)
+          // is reported (both probed).
+          let if_body = match ctx.if_condition_body {
+            Some((c, b)) if physical_equal(c, expr) => Some(b)
+            _ => None
+          }
+          record_function_as_condition(env, ctx, l, fn() {
+            match if_body {
+              Some(b) => "\{r} \{b}"
+              None => "\{r}"
+            }
+          })
         }
       }
       // TS2322 (via the `in` operator's operand constraints): the left
@@ -43189,8 +43325,17 @@ fn check_call_args_in_expr_at(
                       // value to `Any`, so `type_has_undefined` was false
                       // and `is_checkable` was too. With the real value type
                       // the exemption has to be stated.
-                      if is_checkable(ft) &&
-                        !type_has_undefined(ft) &&
+                      //
+                      // `undefined` may arrive through an alias
+                      // (`Nullable<T> = T | null | undefined | void`), and
+                      // `unknown` admits it too; `void` does not (probed:
+                      // `number | void` is TS2790, `Nullable<number>` and
+                      // `unknown` are legal).
+                      // An alias of `unknown` / `any` admits it as the
+                      // type written out does (probed).
+                      if is_checkable(ctx.resolver.unwrap(ft)) &&
+                        !(ctx.resolver.unwrap(ft) is Unknown) &&
+                        !target_admits_nullish(ctx.resolver, ft, false, 0) &&
                         !reached_only_through_index_signature(
                           ctx.resolver,
                           recv_ty,
@@ -43287,7 +43432,7 @@ fn check_call_args_in_expr_at(
               ctx, "cond", "an expression of type `void` cannot be tested for truthiness",
             )
           }
-          record_function_as_condition(env, ctx, c)
+          record_function_as_condition(env, ctx, c, fn() { "\{t}" })
         }
       }
       // Walk each branch under the condition's flow narrowing (the consequent
@@ -45540,6 +45685,7 @@ fn check_function_body_with(
     strict_property_init,
     strict_null_checks,
     in_computed_key: false,
+    if_condition_body: None,
   }
   // Bind parameter names into the environment. Destructured params
   // (`function f({ a, b }: T)` / `function f([a, b]: T[])`) carry a
@@ -57426,6 +57572,37 @@ fn lib_global_ctor_type_name(name : String) -> String? {
 }
 
 ///|
+/// Which of the lib keyed collections a ROOT module binds as a value at
+/// its own top level (`const Map = CustomMap`, `import { Map } from
+/// "immutable"`, `function Set() {}`), for the field-initializer typing in
+/// `inferred_primitive_field_type`. `declared_value_names` cannot answer
+/// it, because it also holds every parameter in the file, so
+/// `unrelated(Map: unknown) {}` would read as a shadow. The
+/// `@value-shadows-known` entry says the answer was computed here: a
+/// namespace layer and a class declared in a function never get it, and
+/// keep the wider test.
+fn register_lib_collection_shadows(
+  module_ : @ast.TsModule,
+  resolver : Resolver,
+) -> Unit {
+  resolver.globals["@value-shadows-known"] = Any
+  let bound = fn(n : String) {
+    module_.imported_binding_names.contains(n) ||
+    resolver.initialized_top_level_names.get(n) is Some(_) ||
+    module_.funcs.iter().any(fn(f) { f.name == n }) ||
+    module_.imports.iter().any(fn(i) { i.name == n }) ||
+    module_.values.iter().any(fn(v) { v.name == n }) ||
+    module_.enums.iter().any(fn(e) { e.name == n }) ||
+    module_.namespaces.iter().any(fn(ns) { ns.name == n })
+  }
+  for n in ["Map", "WeakMap", "Set", "WeakSet"] {
+    if bound(n) {
+      resolver.globals["@value-shadows:" + n] = Any
+    }
+  }
+}
+
+///|
 /// A module-level `const` with no annotation is not in `globals` (only an
 /// annotated binding is), and the top-level env that infers it is walked
 /// AFTER the function bodies — so inside every body it read as `any`, and
@@ -59335,6 +59512,7 @@ fn check_module_function_bodies_layered(
       resolver.initialized_top_level_names,
     )
     register_primitive_top_level_consts(module_, resolver)
+    register_lib_collection_shadows(module_, resolver)
   } else {
     for o in outer_modules {
       Resolver::ingest_module(resolver, o, "")
@@ -59736,6 +59914,7 @@ fn check_module_function_bodies_layered(
       strict_property_init,
       strict_null_checks,
       in_computed_key: false,
+      if_condition_body: None,
     }
     let env = ExprEnv::new()
     for v in module_.values {
@@ -59774,6 +59953,7 @@ fn check_module_function_bodies_layered(
       strict_property_init,
       strict_null_checks,
       in_computed_key: false,
+      if_condition_body: None,
     }
     let env = ExprEnv::new()
     for v in module_.values {
@@ -59844,6 +60024,7 @@ fn check_module_function_bodies_layered(
       strict_property_init,
       strict_null_checks,
       in_computed_key: true,
+      if_condition_body: None,
     }
     let env = ExprEnv::new()
     for v in module_.values {
@@ -59896,6 +60077,7 @@ fn check_module_function_bodies_layered(
       strict_property_init,
       strict_null_checks,
       in_computed_key: false,
+      if_condition_body: None,
     }
     let env = ExprEnv::new()
     for v in module_.values {
@@ -65590,8 +65772,20 @@ fn class_target_methods_present(
       continue
     }
     seen[c.name] = ()
+    // An optional method (`m?(): void`) may be absent from the source.
+    // The parser records it on the `<optional-member:` sentinel, since a
+    // method declaration carries no optional flag.
+    let optional : Map[String, Unit] = Map([])
+    for d in c.duplicate_member_names {
+      if d.has_prefix("<optional-member:") {
+        optional[d["<optional-member:".length():d.length() - 1].to_owned()] = ()
+      }
+    }
     for m in c.methods {
-      if m.is_static || m.name.has_prefix("@@") || m.name.has_prefix("<") {
+      if m.is_static ||
+        m.name.has_prefix("@@") ||
+        m.name.has_prefix("<") ||
+        optional.contains(m.name) {
         continue
       }
       if resolver.lookup_field(src, m.name) is None {

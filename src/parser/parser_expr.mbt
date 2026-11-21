@@ -1591,16 +1591,25 @@ fn Parser::parse_parenthesized_expr(
   self.inherit_source_flags(temp)
   self.inherit_expression_context(temp)
 
-  let expr = temp.parse_expr()
-  if !temp.check(Eof) {
-    raise ParseError("Expected RParen, got \{temp.peek().kind}")
-  }
   // The temp parser records grammar misuses into its own channel; without
   // this hand-off a misuse inside a parenthesized expression (`({ b:
   // yield 2 })` in a non-generator context) silently vanishes. Appending
-  // here keeps the parse-order position the emission loop relies on.
+  // here keeps the parse-order position the emission loop relies on. It
+  // runs on the failure path too: a JSX payload in here has already
+  // taken its lexer diagnostic out of the shared `jsx_lexer_diags`, so
+  // `(true && <b>{0x}</b>,)` would otherwise lose the TS1125.
+  let parsed : Result[@ast.TsExpr, ParseError] = Ok(temp.parse_expr()) catch {
+    e => Err(e)
+  }
   for gm in temp.grammar_misuses {
     self.grammar_misuses.push(gm)
+  }
+  let expr = match parsed {
+    Ok(e) => e
+    Err(e) => raise e
+  }
+  if !temp.check(Eof) {
+    raise ParseError("Expected RParen, got \{temp.peek().kind}")
   }
   self.pos = end_idx + 1
   expr
@@ -1678,14 +1687,21 @@ fn Parser::parse_expr_until_top_level(
   self.inherit_source_flags(temp)
   self.inherit_expression_context(temp)
 
-  let expr = temp.parse_expr()
-  if !temp.check(Eof) {
-    raise ParseError("Expected \{terminator}, got \{temp.peek().kind}")
-  }
   // Same grammar-misuse hand-off as the parenthesized-expression helper
-  // above: the temp parser's recordings would otherwise vanish.
+  // above, on the failure path too: the temp parser's recordings would
+  // otherwise vanish.
+  let parsed : Result[@ast.TsExpr, ParseError] = Ok(temp.parse_expr()) catch {
+    e => Err(e)
+  }
   for gm in temp.grammar_misuses {
     self.grammar_misuses.push(gm)
+  }
+  let expr = match parsed {
+    Ok(e) => e
+    Err(e) => raise e
+  }
+  if !temp.check(Eof) {
+    raise ParseError("Expected \{terminator}, got \{temp.peek().kind}")
   }
   self.pos = end_idx
   expr
@@ -2212,6 +2228,14 @@ fn Parser::try_parse_parenthesized_jsx_expr(
     }
   }
   if j < self.src.length() && self.src[j].to_int().unsafe_to_char() == ')' {
+    // This shortcut never reaches `parse_jsx_opening_header`, so the
+    // element's own type arguments are reported here (`(<Box<0x>></Box>)`
+    // is TS1125). A NESTED element's are not, since the scan does not
+    // parse children.
+    match self.jsx_type_args_span(i) {
+      Some((a, b)) => self.report_jsx_type_arg_lexer_diags(a, b)
+      None => ()
+    }
     self.forgive_jsx_string_artifacts(i, jsx_end)
     self.advance_to_source_pos(j + 1)
     return (true, embeds)
@@ -2535,6 +2559,75 @@ fn Parser::parse_jsx_element_at_source(
 }
 
 ///|
+/// A JSX element's type arguments are TypeScript, not JSX text, so the
+/// element must not forgive a lexer diagnostic inside them: `<Box<0x> />`
+/// is TS1125. The ones in `[from, to)` are taken out of the shared list and
+/// reported now, before the element's forgiveness runs over its range.
+fn Parser::report_jsx_type_arg_lexer_diags(
+  self : Parser,
+  from : Int32,
+  to : Int32,
+) -> Unit {
+  let diags = self.jsx_lexer_diags
+  if !diags.iter().any(fn(d) { d.0 >= from && d.0 < to }) {
+    return
+  }
+  let kept = []
+  for d in diags {
+    if d.0 >= from && d.0 < to {
+      self.grammar_misuses.push(d.1)
+    } else {
+      kept.push(d)
+    }
+  }
+  diags.clear()
+  for d in kept {
+    diags.push(d)
+  }
+}
+
+///|
+/// The source span of the type arguments written on the JSX element whose
+/// `<` is at `open` (`<Box<string>>`), or `None` when it has none.
+fn Parser::jsx_type_args_span(self : Parser, open : Int32) -> (Int32, Int32)? {
+  let mut i = open + 1
+  while i < self.src.length() {
+    let c = self.src[i].to_int().unsafe_to_char()
+    if (c >= 'a' && c <= 'z') ||
+      (c >= 'A' && c <= 'Z') ||
+      (c >= '0' && c <= '9') ||
+      c == '_' ||
+      c == '$' ||
+      c == '.' ||
+      c == '-' {
+      i += 1
+    } else {
+      break
+    }
+  }
+  if i == open + 1 ||
+    i >= self.src.length() ||
+    self.src[i].to_int().unsafe_to_char() != '<' {
+    return None
+  }
+  let mut depth = 1
+  let mut j = i + 1
+  while j < self.src.length() {
+    let cc = self.src[j].to_int().unsafe_to_char()
+    if cc == '<' {
+      depth += 1
+    } else if cc == '>' {
+      depth -= 1
+      if depth == 0 {
+        return Some((i, j + 1))
+      }
+    }
+    j += 1
+  }
+  None
+}
+
+///|
 /// Parse a JSX opening header at `start` — `<Tag attr={…} …>` or
 /// `<Tag …/>`. Returns the position right after the closing `>` /
 /// `/>`, the tag name, the attribute list, and a `self_close` flag
@@ -2605,6 +2698,7 @@ fn Parser::parse_jsx_opening_header(
       j += 1
     }
     if depth == 0 {
+      self.report_jsx_type_arg_lexer_diags(i, j)
       i = j
     }
   }

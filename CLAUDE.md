@@ -8095,6 +8095,99 @@ product surfaces now.
       `Set<number>`, `Array<string>` against `number[]` and
       `Promise<string>` against `Promise<number>` are all silent. The cells
       are declared MISSes in tsc-extra's `libGenericTypeArguments`.
+  Batch HR is four univer false-positive families and the five correct
+  Minors from #327's review. Each cell was checked against the TS7 nightly
+  before the fix was written, and the oracle is unchanged.
+  - **A closure assigning a module-level binding.** A closure copies the
+    bindings it captures, and `bind` writes the copy's DECLARED slot. A
+    module-level `let` has no declared slot in a function's env, so the
+    narrowed type the enclosing body had (`number` after `dpi_cache = i`)
+    became the declared type inside the arrow, and
+    `setTimeout(() => { dpi_cache = null })` read as `null` against `number`.
+    tsc accepts it. Such a copy is now NARROWED, so an assignment falls back
+    to the declared type in `globals`. A `string` assigned there is still
+    reported. An unannotated module `let` (`let n = 0`) assigned inside a
+    function is not judged at all, in a closure or not, and is a declared
+    MISS.
+  - **`delete` through an alias.** TS2790 asked whether the operand's type
+    had `undefined` written in it, so `Nullable<T> = T | null | undefined |
+    void` (univer's own alias) read as not optional. It now asks
+    `target_admits_nullish` through the resolver, and `unknown` and `any`
+    admit it. A union with only `null` or `void` beside the value still
+    reports. Probed: tsc does not count `void` here.
+  - **TS2774 when the tested function is used.** tsc's
+    `isSymbolUsedInConditionBody` exempts a function tested and then used
+    in the guarded region: the `if` body, a ternary's true branch, the right
+    of `&&`. The rule had no exemption, so univer's `onChange &&
+    onChange(value)` was reported. A use after the region does not count.
+  - **`implements` compares method parameters bivariantly.** Two defects.
+    `method_override_incompatible` compared parameters through `unwrap`,
+    which leaves the `undefined` an optional parameter carries outside the
+    alias, so `unit: Unit` against `unit?: Unit` failed. And a callback
+    parameter was compared at all, where tsc relates it bivariantly through
+    the callback's own parameters, so `on(listener: (info: Info) => void)`
+    failed against a wider `Listener`. The callback position now abstains,
+    and `struct_field_assignable` relates two callables bivariantly, which
+    a class assigned to the interface it implements needs too.
+  - **#327's review, five of six.**
+    - The class-target method check in the function-return fallback
+      required an OPTIONAL method, a false positive #327 introduced. A
+      method declaration carries no optional flag, so the parser now puts
+      an optional instance method on the `<optional-member:` sentinel an
+      optional field already uses. TS2729's consumer only looks up field
+      names in it.
+    - The collection-field shadow test asked `declared_value_names`, which
+      holds every parameter in the file, so `unrelated(Map: unknown) {}`
+      lost the field's type. The root module now records which of
+      `Map` / `WeakMap` / `Set` / `WeakSet` it binds at top level, imports
+      included (`register_lib_collection_shadows`). A namespace layer and a
+      class declared in a function keep the wider test.
+    - A JSX element's type arguments are TypeScript, so `<Box<0x> />` is
+      TS1125. The header skips them, and the element then forgave the
+      diagnostic. The skip now reports what lies inside the type arguments
+      before the element's forgiveness runs.
+    - A parenthesized or top-level sub-parse handed its grammar list back
+      only on success. A JSX payload inside it had already taken its lexer
+      diagnostic out of the shared list, so `(true && <b>{0x}</b>,)` lost
+      the TS1125. Both sites hand the list back on failure too.
+    - An unterminated `/*` recorded the PRECEDING token's start, so in
+      `<p /> /*` it sat inside the element and was forgiven. It records the
+      comment's own start now.
+    - The sixth, deduplicating payload lexer messages, was not taken. tsc
+      reports TS1161 at each unterminated regex in `{/x\n}{/y\n}`, and the
+      dedupe would have reported it once, as main did.
+  - **A filed gap the tsc-extra cases exposed.** The lexer runs before the
+    parser, so a `/*` or a lone backtick in JSX text opens a block comment
+    or a template literal that swallows the REST OF THE FILE'S TOKENS.
+    After the element the parser skips to its end, finds no tokens, and
+    checks nothing after it: `<p>a /* b</p>` followed by
+    `const bad: string = 1` is silent. The batch-HQ case
+    `jsxTextIsNotJavaScript` had the backtick cell in the middle, so every
+    `ok…` cell after it was vacuous for mtsc; it is last now. The fix
+    needs the lexer to record those spans and the parser to re-lex the tail
+    after such an element, and it is filed with the cells declared as
+    MISSes (`jsxTextOpensNoBlockComment`, `jsxTextOpensNoTemplate`).
+  - **#328's review: one Major and five Minors, four fixed.**
+    - The Major was a false positive the TS2774 exemption still had:
+      `if (f && ready) { f() }` is accepted by tsc, because a `&&` that is
+      itself an `if` condition counts a use in the then-block. The same
+      `&&` as a ternary's condition is reported (both probed), so the
+      `if` handler records its condition and then-block in a context
+      slot, and the `&&` check counts the then-block only when its own
+      expression IS that condition, compared by identity.
+    - The callback abstention in `method_override_incompatible` also
+      skipped a callable against a scalar, which is TS2416 in either
+      direction. Now only two callables abstain.
+    - `delete` through an alias of `unknown` or `any` was TS2790.
+    - The parenthesized JSX shortcut never reaches the opening-header
+      parser, so `(<Box<0x>></Box>)` lost its TS1125. The element's own
+      type arguments are reported there now; a nested element's are not,
+      since that scan does not parse children.
+    - Not reproduced: an optional method on a class EXPRESSION, which the
+      fallback cannot reach as a class target. Not observable: a JSX
+      default in a destructuring lookahead, because
+      `({ x = <Box<string> /> } = source)` is a parse error in every
+      binary, the legal spelling included. That parser gap is filed.
 - `src/transform` is the JS-side pipeline behind `mtsc`: bundling, folding,
   tree-shaking, and the property mangler. Its safety story is type-driven and
   has two halves — `export_surface.mbt` (names reachable from the entry's

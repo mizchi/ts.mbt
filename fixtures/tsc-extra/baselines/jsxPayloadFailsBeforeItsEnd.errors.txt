@@ -1,0 +1,24 @@
+jsxPayloadFailsBeforeItsEnd.tsx(11,63): error TS2872: This kind of expression is always truthy.
+jsxPayloadFailsBeforeItsEnd.tsx(11,69): error TS1125: Hexadecimal digit expected.
+jsxPayloadFailsBeforeItsEnd.tsx(11,75): error TS1005: ';' expected.
+
+
+==== jsxPayloadFailsBeforeItsEnd.tsx (3 errors) ====
+    // A `{…}` payload is JavaScript, and one whose parse fails before it reaches
+    // a nested element still holds that element's lexer errors: here a `for`
+    // head has no `;` to end its condition.
+    
+    declare global {
+      namespace JSX {
+        interface IntrinsicElements { p: {}; b: {} }
+      }
+    }
+    
+    export const badPayloadMissingSemicolon = <p>{(() => { for (; <b>{0x}</b> ) {} })()}</p>;
+                                                                  ~~~~~~~~~~~
+!!! error TS2872: This kind of expression is always truthy.
+                                                                        
+!!! error TS1125: Hexadecimal digit expected.
+                                                                              ~
+!!! error TS1005: ';' expected.
+    

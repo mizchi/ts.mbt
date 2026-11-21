@@ -35,3 +35,10 @@ declare const gs: () => Source;
 export const badClassMethod: () => Target = gs;
 declare const gt: () => Target;
 export const okClassSubtype: () => Source = gt;
+
+// An OPTIONAL method of the target class may be absent from the source; a
+// required one, abstract or not, may not.
+class TargetOptional { tag = 1; optional?(): void; }
+export const okOptionalMethod: () => TargetOptional = gs;
+abstract class TargetAbstract { tag = 1; optional?(): void; abstract req(): void; }
+export const badAbstractMethod: () => TargetAbstract = gs;

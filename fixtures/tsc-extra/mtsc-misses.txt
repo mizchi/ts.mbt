@@ -73,3 +73,9 @@ libGenericTypeArguments:badMap  same cause as `badSet`, for `Map<K, V>`
 libGenericTypeArguments:badReadonlyMap  same cause as `badSet`, for `Map<K, V>` against `ReadonlyMap<K, V>`
 libGenericTypeArguments:badArray  same cause as `badSet`: `Array<string>` written with its argument is not compared against `number[]`
 libGenericTypeArguments:badPromise  same cause as `badSet`, for `Promise<T>`
+closureAssignsModuleBinding:badInferredFromFunction  an unannotated module `let` assigned inside a function body is read with no declared type there, so the assignment is not judged (the annotated spelling is)
+jsxTextOpensNoBlockComment:badAfterElement  the lexer runs before the parser and reads the `/*` in JSX text as a block comment that swallows the rest of the file's tokens, so nothing after the element is parsed
+jsxTextOpensNoBlockComment:badLaterFunction  same cause as `badAfterElement`
+jsxTextOpensNoTemplate:badAfterElement  the lexer reads the backtick in JSX text as an unterminated template literal that swallows the rest of the file's tokens, so nothing after the element is parsed
+jsxTextOpensNoTemplate:badLaterFunction  same cause as `badAfterElement`
+jsxPayloadFailsBeforeItsEnd:badPayloadMissingSemicolon  a JSX payload whose parse fails before it reaches a nested element (a `for` head with no `;` to end its condition) reads nothing past the failure, so neither the TS1125 inside that element nor the TS1005 is reported
